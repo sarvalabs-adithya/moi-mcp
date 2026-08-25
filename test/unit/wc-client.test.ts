@@ -1,0 +1,229 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { MoiError } from "../../src/moi-error.js";
+import {
+  extractHash,
+  paramStyle,
+  toSession,
+  translateWcError,
+  WalletConnectClient,
+  WC_NAMESPACE,
+  type SignClientLike,
+  type WcConfig,
+} from "../../src/wc/client.js";
+import { loadSession } from "../../src/wc/session.js";
+
+const homes: string[] = [];
+function cfg(overrides: Partial<WcConfig> = {}): WcConfig {
+  const home = mkdtempSync(join(tmpdir(), "moi-wc-"));
+  homes.push(home);
+  return { projectId: "p", home, network: "voyage", requestTimeoutMs: 500, ...overrides };
+}
+afterEach(() => { for (const d of homes.splice(0)) rmSync(d, { recursive: true, force: true }); });
+
+const APPROVED = {
+  topic: "topic-1",
+  pairingTopic: "pair-1",
+  expiry: Math.floor(Date.now() / 1000) + 3600,
+  peer: { metadata: { name: "MOI Wallet", url: "https://wallet.moi.technology" } },
+  namespaces: { moi: { accounts: ["moi:14:0xabc123"] } },
+};
+
+/** Lets a test decide exactly when the "user scanned the QR" moment happens. */
+function deferredApproval() {
+  let approve: () => void = () => {};
+  const scanned = new Promise<void>((r) => { approve = r; });
+  return { approve, approval: async () => { await scanned; return APPROVED; } };
+}
+
+function fakeClient(over: Partial<SignClientLike> = {}, gate?: { approval: () => Promise<unknown> }): SignClientLike {
+  return {
+    connect: vi.fn(async () => ({
+      uri: "wc:abc@2?relay-protocol=irn",
+      approval: gate?.approval ?? (async () => APPROVED),
+    })),
+    request: vi.fn(async () => "0xfeed01"),
+    disconnect: vi.fn(async () => {}),
+    on: vi.fn(),
+    session: { keys: [], get: () => undefined },
+    ...over,
+  } as SignClientLike;
+}
+
+describe("pairing", () => {
+  it("requests the moi namespace with the network's CAIP-2 chain", async () => {
+    const client = fakeClient();
+    const wc = new WalletConnectClient(cfg(), async () => client);
+    await wc.pair();
+    const args = (client.connect as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      requiredNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+    };
+    const ns = args.requiredNamespaces[WC_NAMESPACE]!;
+    expect(ns.chains).toEqual(["moi:14"]);
+    expect(ns.methods).toEqual(["moi.signInteraction", "moi.sendInteractions"]);
+    expect(ns.events).toEqual(["accountsChanged", "chainChanged"]);
+  });
+
+  it("returns the URI immediately and persists the session only after approval", async () => {
+    const c = cfg();
+    const gate = deferredApproval();
+    const wc = new WalletConnectClient(c, async () => fakeClient({}, gate));
+
+    const { uri, approval } = await wc.pair();
+    expect(uri).toMatch(/^wc:/);
+    // The QR is out but nobody has scanned it: nothing may be written yet.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(loadSession(c.home)).toBeUndefined();
+
+    gate.approve();
+    await approval;
+    expect(loadSession(c.home)?.account).toBe("0xabc123");
+  });
+
+  it("subscribes to session_delete and session_expire", async () => {
+    const client = fakeClient();
+    await new WalletConnectClient(cfg(), async () => client).init();
+    const events = (client.on as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0]);
+    expect(events).toContain("session_delete");
+    expect(events).toContain("session_expire");
+  });
+
+  it("surfaces a relay failure as RELAY_UNAVAILABLE", async () => {
+    const wc = new WalletConnectClient(cfg(), async () => { throw new Error("getaddrinfo ENOTFOUND relay"); });
+    await expect(wc.pair()).rejects.toMatchObject({ code: "RELAY_UNAVAILABLE" });
+  });
+});
+
+describe("toSession", () => {
+  it("takes the account from the CAIP-10 tail", () => {
+    expect(toSession(APPROVED, "voyage", "moi:14").account).toBe("0xabc123");
+  });
+
+  it("refuses a session with no usable account instead of storing a broken one", () => {
+    const bad = { ...APPROVED, namespaces: { moi: { accounts: [] } } };
+    expect(() => toSession(bad, "voyage", "moi:14")).toThrow(MoiError);
+  });
+});
+
+describe("sendInteraction", () => {
+  const ix = { sender: { id: "0xa", sequence: 0, key_id: 0 }, fuel_price: 1, fuel_limit: 1, ix_operations: [] };
+
+  async function paired(client: SignClientLike) {
+    const c = cfg();
+    const wc = new WalletConnectClient(c, async () => client);
+    const { approval } = await wc.pair();
+    return { wc, session: await approval };
+  }
+
+  it("sends the plain InteractionObject positionally, as the reference dapp does", async () => {
+    const client = fakeClient();
+    const { wc, session } = await paired(client);
+    await wc.sendInteraction(session, ix as never);
+    const req = (client.request as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
+      topic: string; chainId: string; request: { method: string; params: unknown[] };
+    };
+    expect(req.request.method).toBe("moi.sendInteractions");
+    expect(req.chainId).toBe("moi:14");
+    expect(req.request.params).toEqual([ix]);          // positional, not {ix_args}
+    expect(req.request.params[0]).not.toHaveProperty("ix_args");
+  });
+
+  it("maps a user rejection to USER_REJECTED", async () => {
+    const err = Object.assign(new Error("User rejected."), { code: 5000 });
+    const { wc, session } = await paired(fakeClient({ request: vi.fn(async () => { throw err; }) as never }));
+    await expect(wc.sendInteraction(session, ix as never)).rejects.toMatchObject({ code: "USER_REJECTED" });
+  });
+
+  it("maps a 4001 rejection too", async () => {
+    const err = Object.assign(new Error("nope"), { code: 4001 });
+    const { wc, session } = await paired(fakeClient({ request: vi.fn(async () => { throw err; }) as never }));
+    await expect(wc.sendInteraction(session, ix as never)).rejects.toMatchObject({ code: "USER_REJECTED" });
+  });
+
+  it("times out when the phone is ignored", async () => {
+    const { wc, session } = await paired(fakeClient({ request: vi.fn(() => new Promise(() => {})) as never }));
+    await expect(wc.sendInteraction(session, ix as never)).rejects.toMatchObject({ code: "REQUEST_TIMEOUT" });
+  });
+
+  it("tracks in-flight requests so status can report them", async () => {
+    let release: (v: string) => void = () => {};
+    const client = fakeClient({ request: vi.fn(() => new Promise<string>((r) => { release = r; })) as never });
+    const { wc, session } = await paired(client);
+    const inFlight = wc.sendInteraction(session, ix as never);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(wc.pendingRequests).toBe(1);
+    release("0xfeed02");
+    await inFlight;
+    expect(wc.pendingRequests).toBe(0);
+  });
+
+  it("clears the local session on disconnect", async () => {
+    const c = cfg();
+    const wc = new WalletConnectClient(c, async () => fakeClient());
+    await (await wc.pair()).approval;
+    expect(loadSession(c.home)).toBeDefined();
+    expect(await wc.disconnect()).toBe(true);
+    expect(loadSession(c.home)).toBeUndefined();
+  });
+});
+
+describe("extractHash", () => {
+  it("accepts a bare hash string — the shape the reference dapp assumes", () => {
+    expect(extractHash("0xabc")).toBe("0xabc");
+  });
+
+  it("accepts an object under any of the plausible field names", () => {
+    for (const key of ["hash", "ix_hash", "interaction_hash", "txHash", "result"]) {
+      expect(extractHash({ [key]: "0xdef" })).toBe("0xdef");
+    }
+  });
+
+  it("fails loudly rather than inventing a hash", () => {
+    for (const bad of [null, {}, "not-hex", { hash: 12 }]) {
+      expect(() => extractHash(bad)).toThrow(MoiError);
+    }
+  });
+});
+
+describe("translateWcError", () => {
+  it("recognises rejection wording without a code", () => {
+    expect(translateWcError(new Error("User declined the request")).code).toBe("USER_REJECTED");
+  });
+
+  it("maps a dead session to WALLET_NOT_CONNECTED", () => {
+    expect(translateWcError(new Error("No matching key. session topic doesn't exist")).code)
+      .toBe("WALLET_NOT_CONNECTED");
+  });
+
+  it("falls back to RPC_ERROR", () => {
+    expect(translateWcError(new Error("something else")).code).toBe("RPC_ERROR");
+  });
+
+  it("passes a MoiError through untouched", () => {
+    const e = new MoiError("REQUEST_TIMEOUT" as never, "x");
+    expect(translateWcError(e)).toBe(e);
+  });
+});
+
+describe("paramStyle", () => {
+  it("defaults to positional", () => {
+    expect(paramStyle({})).toBe("positional");
+  });
+
+  it("switches to ix_args on request, without a code change", () => {
+    expect(paramStyle({ MOI_WC_PARAM_STYLE: "ix_args" })).toBe("ix_args");
+  });
+});
+
+describe("@walletconnect/sign-client interop", () => {
+  // Guards an ESM/CJS trap: the default export is a module object of
+  // constants whose .init is undefined, so a default import compiles but
+  // dies at runtime with "SignClient.init is not a function".
+  it("exposes SignClient.init via the named export", async () => {
+    const mod = await import("@walletconnect/sign-client");
+    expect(typeof mod.SignClient?.init).toBe("function");
+  });
+});

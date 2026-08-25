@@ -16,6 +16,8 @@ import { getConfig, log } from "./config.js";
 import { messageOf } from "./errors.js";
 import { registerResources } from "./resources/index.js";
 import { registerReadTools } from "./tools/reads.js";
+import { registerWalletTools } from "./tools/wallet.js";
+import { registerWriteTools } from "./tools/writes.js";
 
 // Resolves to the package root from both src/ (tsx) and dist/ (built).
 const require = createRequire(import.meta.url);
@@ -87,6 +89,8 @@ async function main(): Promise<void> {
   const server = new McpServer({ name: pkg.name, version: pkg.version });
   registerPing(server);
   registerReadTools(server);
+  registerWalletTools(server);
+  registerWriteTools(server);
   registerResources(server);
 
   await server.connect(new StdioServerTransport());
