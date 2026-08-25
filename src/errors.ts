@@ -6,6 +6,7 @@
 
 import { McpError, ErrorCode as JsonRpcErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
+import { MoiError } from "./moi-error.js";
 import { ErrorCode } from "./schema.js";
 
 /** Which JSON-RPC code best represents each MOI condition. */
@@ -52,4 +53,15 @@ export function fail(
 export function messageOf(err: unknown): string {
   if (err instanceof Error) return err.message;
   return typeof err === "string" ? err : JSON.stringify(err);
+}
+
+/**
+ * Boundary converter. src/moi/* and src/wc/* throw MoiError (framework-free);
+ * tool handlers turn it into the McpError the client understands. Anything
+ * else becomes an InternalError with its message preserved.
+ */
+export function toMcpError(err: unknown): McpError {
+  if (err instanceof McpError) return err;
+  if (err instanceof MoiError) return mcpError(err.code, err.message, err.data);
+  return new McpError(JsonRpcErrorCode.InternalError, messageOf(err));
 }

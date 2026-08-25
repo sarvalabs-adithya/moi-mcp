@@ -25,7 +25,9 @@ See examples/claude-desktop.json.
 `;
 
 const NOT_YET = (cmd: string): string =>
-  `\`moi-mcp ${cmd}\` lands in Phase 2 (WalletConnect). Not implemented yet.`;
+  `\`moi-mcp ${cmd}\` lands in Phase 2 (WalletConnect pairing).\n` +
+  `Track: https://github.com/sarvalabs/moi-mcp/issues (open one once the repo exists).\n` +
+  `Until then, wallet tools are unavailable and read-only moi_* tools work without pairing.`;
 
 function main(argv: string[]): number {
   const command = argv[0] ?? "help";

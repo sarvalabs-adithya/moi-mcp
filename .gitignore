@@ -5,3 +5,11 @@ dist/
 .env.local
 coverage/
 .DS_Store
+
+# Never commit a wallet keystore or session, even if MOI_MCP_HOME is pointed
+# somewhere inside the repo during development.
+.moi-mcp/
+moi-mcp-home/
+*.db
+*.db-journal
+session.json

@@ -112,11 +112,11 @@ export const GetInteractionOutput = z.object({
   status: z.enum(["pending", "success", "failed", "unknown"]),
   sender: HexId,
   operations: z.array(
-    z.object({ type: z.string(), payload: z.record(z.unknown()) })
+    z.object({ type: z.string(), payload: z.record(z.string(), z.unknown()) })
   ),
   fuelUsed: z.number().optional(),
   blockHeight: z.number().optional(),
-  receipt: z.record(z.unknown()).optional(),
+  receipt: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const GetLogicInput = z.object({ logicId: LogicId });
@@ -146,7 +146,7 @@ export const ResolveAgentOutput = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).default([]),
   endpoint: z.string().url().optional(),   // x402 / service URL
-  metadata: z.record(z.unknown()).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ export const CallLogicInput = z.object({
 
 export const CallLogicViewOutput = z.object({
   routine: z.string(),
-  outputs: z.record(z.unknown()),
+  outputs: z.record(z.string(), z.unknown()),
 });
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ export const WcRequiredNamespaces = z.object({
  * ix_args encoding: CONFIRM against Dapp-docs (POLO-encoded hex vs JSON object).
  */
 export const WcSendInteractionsParams = z.object({
-  ix_args: z.union([z.string(), z.record(z.unknown())]),
+  ix_args: z.union([z.string(), z.record(z.string(), z.unknown())]),
   /** Optional UI hints the wallet may render. */
   meta: z
     .object({
@@ -243,7 +243,7 @@ export const WcSendInteractionsResult = z.object({
 export const WcSignInteractionParams = WcSendInteractionsParams;
 
 export const WcSignInteractionResult = z.object({
-  ix_args: z.union([z.string(), z.record(z.unknown())]),
+  ix_args: z.union([z.string(), z.record(z.string(), z.unknown())]),
   signature: z.string(),
 });
 
