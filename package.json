@@ -49,10 +49,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@walletconnect/sign-client": "^2.17.0",
-    "@walletconnect/utils": "^2.17.0",
     "dotenv": "^16.4.5",
-    "js-moi-agent-registry": "^0.3.0-rc1",
     "js-moi-sdk": "^0.8.0",
+    "js-polo": "^0.1.4",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "zod": "^3.23.8"
