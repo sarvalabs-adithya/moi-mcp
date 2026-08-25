@@ -110,7 +110,7 @@ Accept
 * `npx tsx src/index.ts` starts, responds to MCP `initialize` (use `npx @modelcontextprotocol/inspector`).
 * `npm test` green.
 
-## Phase 1 — Read path (≈8h)
+## Phase 1 — Read path (≈8h) — DONE
 
 Tasks
 
@@ -126,7 +126,7 @@ Accept
 * `moi_resolve_agent("<known handle>")` returns address + capabilities.
 * Unit tests for amount normalisation (dimension 0, 6, 18).
 
-## Phase 2 — WalletConnect + write path (≈12h)
+## Phase 2 — WalletConnect + write path (≈12h) — DONE except the physical scan
 
 Tasks
 
@@ -160,7 +160,7 @@ Accept
 * Switch wallet network → `NETWORK_MISMATCH` on write; reads still work.
 * Unit tests: ix-builder shapes; session validity; WC client with mocked SignClient.
 
-## Phase 3 — Packaging + client configs (≈4h)
+## Phase 3 — Packaging + client configs (≈4h) — DONE except npm publish
 
 Tasks
 
@@ -180,7 +180,7 @@ Accept
 
 * Fresh machine: paste claude-desktop.json → restart Claude → "connect my MOI wallet" → QR appears in chat → scan → "what's my balance" works → "send 1 MOI to <addr>" pops on phone.
 
-## Phase 4 — Distribution (≈8h, non-code)
+## Phase 4 — Distribution (≈8h, non-code) — DRAFTED, NOTHING EXECUTED
 
 * Submit: Smithery, Glama, PulseMCP, mcp.so, Cursor directory, Anthropic connector directory.
 * 60-sec Loom: connect → resolve agent → pay agent → hash. Post on X + LinkedIn.
@@ -208,11 +208,50 @@ Track from day 0: npm weekly downloads, GH stars, directory listings, Session 8 
 * Every tool handler validates input with the zod schema from `schema.ts` and returns the matching output shape.
 * After each phase: run tests, run inspector smoke, print the tree, stop.
 
-## 7. Open questions for Rahul (answer before Phase 2)
+## 7. Open questions — status
 
-1. Exact `ix_args` encoding MOI Wallet expects on `moi.sendInteractions` (POLO hex vs JSON)?
-2. CAIP-2 chain ids for voyage / mainnet in the WC namespace?
-3. Does the wallet honour a `meta.description` field for the approval screen? If not, what does it display?
-4. Which agent-registry logic id is canonical on voyage right now?
-5. npm scope: `@moi-protocol` or `@sarvalabs`? Repo under `sarvalabs/` with Adithya as maintainer?
-6. Can we get a shared `WC_PROJECT_ID` to ship as default?
+Four of the six were answerable from shipped code and public sources. Two still
+need Rahul.
+
+**1. Exact `ix_args` encoding — ANSWERED, with a twist.**
+There are two different transports and the plan conflated them.
+- *WalletConnect (us → wallet)*: the plain `InteractionObject`, passed
+  positionally as `params: [ix]`. Source: `sarvalabs/wallet-connect-dapp`
+  `src/contexts/JsonRpcContext.tsx`, which calls
+  `request({ method: "moi.sendInteractions", params: [assetContext] })` where
+  `assetContext = await builder.ixData(...)`, typed `InteractionObject`.
+- *Node JSON-RPC (wallet → node)*: `{ ix_args, signatures }` where `ix_args` is
+  POLO-encoded **unprefixed** hex. Source: `js-moi-wallet`'s `signInteraction`,
+  `ix_args: bytesToHex(serializeIxObject(ixObject))`.
+We implement the first and can switch to the second with
+`MOI_WC_PARAM_STYLE=ix_args`. **Still worth confirming with Rahul**, since no
+public doc gives a literal request body.
+
+**2. CAIP-2 chain ids — PARTLY ANSWERED.**
+`moi:14` for devnet (`sarvalabs/wallet-connect-dapp` `src/chains/moi.ts`:
+`{ name: "Moi devnet", id: "moi:14", rpc: [...], slip44: 614 }`).
+**Mainnet: NOT FOUND anywhere public.** `NETWORKS.mainnet.caip2Verified` is
+false and pairing on mainnet will fail. Needs Rahul.
+
+**3. `meta.description` on the approval screen — UNRESOLVED.**
+The wallet docs say the approval screen shows "operation details" but never name
+the field. With positional params there is nowhere to put `meta` anyway, so we
+do not send it. Needs Rahul.
+
+**4. Canonical agent-registry logic id — ANSWERED.**
+`0x20000000c684f926ed158d0cbfe66af0e482a389393e7899a5a73fcb00000000`, hardcoded
+in `js-moi-agent-registry` `lib.cjs/client.js`, overridable with
+`MOI_AGENT_REGISTRY_LOGIC_ID`. We reuse that exact variable name. The logic
+loads on devnet (manifest fetches, 11 routines) but has no state object yet, so
+reads answer "not found".
+
+**5. npm scope — STILL YOURS.** Both `@moi-protocol/mcp-server` and
+`@sarvalabs/mcp-server` are unclaimed. Currently set to `@moi-protocol`.
+
+**6. Shared `WC_PROJECT_ID` — STILL YOURS.** Required, no default shipped. The
+server starts without it and says so rather than dying.
+
+**New question 7: which participant should read-only simulation use?**
+`getLogicDriver` routes read calls through a Signer and the node resolves that
+caller's account meta info, so a placeholder identity gets "account not found".
+`MOI_READ_CALLER` overrides it. Is there a canonical read-only caller on devnet?
