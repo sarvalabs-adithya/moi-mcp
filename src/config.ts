@@ -16,6 +16,48 @@ import { isAbsolute, resolve } from "node:path";
 
 import { Config } from "./schema.js";
 
+/** Where to get a WalletConnect project id, named everywhere we complain about it. */
+export const WC_PROJECT_ID_HELP =
+  "Get a free one at https://cloud.reown.com — create a project, copy its Project ID, " +
+  "then set WC_PROJECT_ID in your MCP client config (the `env` block).";
+
+/** Placeholders people leave behind after copying .env.example or a README. */
+const PLACEHOLDERS = new Set([
+  "replace_me",
+  "replace_with_your_project_id",
+  "your_project_id",
+  "changeme",
+  "todo",
+]);
+
+/**
+ * Describe what is wrong with a project id, or undefined if it looks usable.
+ *
+ * Reown ids are 32 hex characters. A wrong-looking id is reported but not
+ * rejected — the format is theirs to change, and a hard failure on a valid id
+ * would be worse than a warning on an invalid one.
+ */
+export function projectIdIssue(value: string | undefined): string | undefined {
+  const v = (value ?? "").trim();
+  if (v === "") return `WC_PROJECT_ID is not set. ${WC_PROJECT_ID_HELP}`;
+  if (PLACEHOLDERS.has(v.toLowerCase()) || /^[<{].*[>}]$/.test(v)) {
+    return `WC_PROJECT_ID is still the placeholder "${v}". ${WC_PROJECT_ID_HELP}`;
+  }
+  if (!/^[0-9a-f]{32}$/i.test(v)) {
+    return (
+      `WC_PROJECT_ID does not look like a Reown project id (expected 32 hex characters, ` +
+      `got ${v.length}). Pairing will probably fail. ${WC_PROJECT_ID_HELP}`
+    );
+  }
+  return undefined;
+}
+
+/** True when the id is unusable, as opposed to merely odd-looking. */
+export function projectIdIsUnusable(value: string | undefined): boolean {
+  const v = (value ?? "").trim();
+  return v === "" || PLACEHOLDERS.has(v.toLowerCase()) || /^[<{].*[>}]$/.test(v);
+}
+
 export type LoadedConfig = Config & {
   /** MOI_MCP_HOME with `~` expanded to an absolute path. Created on load. */
   home: string;
@@ -50,14 +92,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
     if (typeof value === "string" && value.trim() !== "") raw[key] = value;
   }
 
+  // Catch the one that trips everyone up first, with a message that says
+  // exactly where to go, rather than letting zod say "Required".
+  const projectIssue = projectIdIssue(raw["WC_PROJECT_ID"]);
+  if (projectIssue && projectIdIsUnusable(raw["WC_PROJECT_ID"])) {
+    throw new Error(projectIssue);
+  }
+
   const parsed = Config.safeParse(raw);
   if (!parsed.success) {
     const detail = parsed.error.issues
-      .map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`)
-      .join("\n");
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
     throw new Error(
-      `Invalid MOI MCP configuration:\n${detail}\n\n` +
-        `Copy .env.example to .env and fill it in, or set these in your MCP client config.`,
+      `Invalid MOI MCP configuration — ${detail}. ` +
+        `Set these in your MCP client config (the \`env\` block), or copy .env.example to .env.`,
     );
   }
 
@@ -104,5 +153,8 @@ export function log(level: Exclude<LogLevel, "silent">, message: string): void {
   const configured = (process.env.LOG_LEVEL ?? "error") as LogLevel;
   const threshold = LEVELS[configured] ?? LEVELS.error;
   if (LEVELS[level] > threshold) return;
-  process.stderr.write(`[moi-mcp] ${level}: ${message}\n`);
+  // Collapse to a single line: MCP clients show stderr in a cramped log pane,
+  // and a wrapped stack trace buries the actionable sentence.
+  const oneLine = message.replace(/\s*\n\s*/g, " ").trim();
+  process.stderr.write(`[moi-mcp] ${level}: ${oneLine}\n`);
 }

@@ -3,7 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { getConfig, log } from "../config.js";
+import { getConfig, log, projectIdIssue } from "../config.js";
 import { messageOf, toMcpError } from "../errors.js";
 import { NETWORKS } from "../moi/provider.js";
 import {
@@ -147,10 +147,14 @@ export function registerWalletTools(server: McpServer): void {
         const session = wc.session();
         const validity = checkValidity(session, cfg.MOI_NETWORK);
 
+        // A syntactically odd project id still loads, but it will fail at the
+        // relay — say so here rather than letting the user find out mid-pair.
+        const idIssue = projectIdIssue(cfg.WC_PROJECT_ID);
+
         structuredContent = {
           connected: validity.valid,
           pendingRequests: wc.pendingRequests,
-          configOk: true,
+          configOk: !idIssue,
           caip2Verified: NETWORKS[cfg.MOI_NETWORK].caip2Verified,
           ...(session
             ? {
@@ -161,7 +165,13 @@ export function registerWalletTools(server: McpServer): void {
                 expiry: session.expiry,
               }
             : {}),
-          ...(validity.valid ? {} : validity.message ? { configError: validity.message } : {}),
+          ...(idIssue
+            ? { configError: idIssue }
+            : validity.valid
+              ? {}
+              : validity.message
+                ? { configError: validity.message }
+                : {}),
         };
       } catch (err) {
         // A broken config is exactly what this tool exists to report.

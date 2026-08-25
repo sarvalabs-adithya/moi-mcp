@@ -12,7 +12,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createRequire } from "node:module";
 import { z } from "zod";
 
-import { getConfig, log } from "./config.js";
+import { getConfig, log, projectIdIssue } from "./config.js";
 import { messageOf } from "./errors.js";
 import { registerResources } from "./resources/index.js";
 import { registerReadTools } from "./tools/reads.js";
@@ -81,6 +81,10 @@ async function main(): Promise<void> {
   // an unexplained failure. `ping` reports the same error to the agent.
   try {
     const cfg = getConfig();
+    // A usable-but-odd project id loads fine and then fails at the relay.
+    // Say so at error level so it is visible under the default LOG_LEVEL.
+    const idIssue = projectIdIssue(cfg.WC_PROJECT_ID);
+    if (idIssue) log("error", idIssue);
     log("info", `config ok — network=${cfg.MOI_NETWORK} home=${cfg.home}`);
   } catch (err) {
     log("error", `starting with invalid config — ${messageOf(err)}`);

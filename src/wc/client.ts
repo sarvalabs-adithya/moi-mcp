@@ -11,6 +11,7 @@
 // undefined. `import SignClient from ...` fails at runtime, not compile time.
 import { SignClient } from "@walletconnect/sign-client";
 
+import { WC_PROJECT_ID_HELP } from "../config.js";
 import { MoiError } from "../moi-error.js";
 import {
   ErrorCode,
@@ -97,8 +98,8 @@ export class WalletConnectClient {
     } catch (err) {
       throw new MoiError(
         ErrorCode.RELAY_UNAVAILABLE,
-        `Could not reach the WalletConnect relay: ${err instanceof Error ? err.message : String(err)}. ` +
-          `Check WC_PROJECT_ID and your network connection.`,
+        `Could not reach the WalletConnect relay: ${firstLine(err instanceof Error ? err.message : String(err))}. ` +
+          `Check your network connection and WC_PROJECT_ID. ${WC_PROJECT_ID_HELP}`,
       );
     }
 
@@ -133,11 +134,11 @@ export class WalletConnectClient {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       // The relay rejects an unknown or malformed project id at publish time.
-      if (/publish|project|unauthorized|403/i.test(detail)) {
+      if (/publish|project|unauthorized|forbidden|403|401/i.test(detail)) {
         throw new MoiError(
           ErrorCode.RELAY_UNAVAILABLE,
-          `The WalletConnect relay refused the pairing: ${detail}. ` +
-            `This usually means WC_PROJECT_ID is missing or not a valid project id from cloud.reown.com.`,
+          `The WalletConnect relay refused the pairing, which almost always means ` +
+            `WC_PROJECT_ID is wrong. ${WC_PROJECT_ID_HELP} (relay said: ${firstLine(detail)})`,
         );
       }
       throw translateWcError(err);
@@ -254,6 +255,11 @@ async function defaultFactory(cfg: WcConfig): Promise<SignClientLike> {
     storageOptions: { database: `${cfg.home}/wc.db` },
   });
   return client as unknown as SignClientLike;
+}
+
+/** Relay errors arrive with stack traces attached; keep the first line only. */
+function firstLine(message: string): string {
+  return (message.split("\n")[0] ?? message).trim().slice(0, 160);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
