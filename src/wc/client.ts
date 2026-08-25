@@ -12,7 +12,14 @@
 import { SignClient } from "@walletconnect/sign-client";
 
 import { MoiError } from "../moi-error.js";
-import { ErrorCode, WC_EVENTS, WC_METHODS, type Network } from "../schema.js";
+import {
+  ErrorCode,
+  WC_EVENTS,
+  WC_METHODS,
+  WcSendInteractionsParams,
+  WcSendInteractionsParamsIxArgs,
+  type Network,
+} from "../schema.js";
 import type { UnsignedInteraction } from "../moi/ix-builder.js";
 import { NETWORKS } from "../moi/provider.js";
 import { clearSession, loadSession, saveSession, type Session } from "./session.js";
@@ -20,14 +27,11 @@ import { clearSession, loadSession, saveSession, type Session } from "./session.
 export const WC_NAMESPACE = "moi";
 
 /**
- * How the interaction is placed in the WalletConnect request.
+ * How the interaction is placed in the WalletConnect request. Both forms and
+ * the evidence for each are modelled in schema.ts §4.
  *
- * "positional" — `params: [ixObject]`, the plain InteractionObject. This is
- *   what sarvalabs/wallet-connect-dapp does and is the default.
- * "ix_args"    — `params: [{ ix_args: <POLO hex>, meta }]`, matching
- *   schema.WcSendInteractionsParams. Kept because no public doc gives a
- *   literal request body for moi.sendInteractions (PLAN open Q1); set
- *   MOI_WC_PARAM_STYLE=ix_args to switch without a code change.
+ * "positional" — schema.WcSendInteractionsParams: `params: [ixObject]`.
+ * "ix_args"    — schema.WcSendInteractionsParamsIxArgs: `params: [{ ix_args }]`.
  */
 export type ParamStyle = "positional" | "ix_args";
 
@@ -180,15 +184,29 @@ export class WalletConnectClient {
     const client = await this.init();
     const style = paramStyle();
 
-    const params =
-      style === "ix_args"
-        ? [
-            {
-              ix_args: opts.poloHex ?? ix,
-              meta: { dappName: METADATA.name, ...(opts.description ? { description: opts.description } : {}) },
-            },
-          ]
-        : [ix];
+    // Validate against the schema before anything reaches the relay: a
+    // malformed interaction should fail here with a readable message, not on
+    // the user's phone.
+    let params: unknown[];
+    if (style === "ix_args") {
+      if (!opts.poloHex) {
+        throw new MoiError(
+          ErrorCode.INVALID_ARGS,
+          "MOI_WC_PARAM_STYLE=ix_args requires a POLO-encoded interaction, but none was supplied.",
+        );
+      }
+      params = parseParams(WcSendInteractionsParamsIxArgs, [
+        {
+          ix_args: opts.poloHex,
+          meta: {
+            dappName: METADATA.name,
+            ...(opts.description ? { description: opts.description } : {}),
+          },
+        },
+      ]);
+    } else {
+      params = parseParams(WcSendInteractionsParams, [ix]);
+    }
 
     this.pending += 1;
     try {
@@ -210,6 +228,24 @@ export class WalletConnectClient {
 }
 
 // ---------------------------------------------------------------------------
+
+/** Validate outgoing params, turning a zod failure into a readable MoiError. */
+function parseParams<T extends { safeParse: (v: unknown) => { success: boolean; data?: unknown; error?: { issues: Array<{ path: Array<string | number>; message: string }> } } }>(
+  schema: T,
+  value: unknown,
+): unknown[] {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    const detail = (result.error?.issues ?? [])
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    throw new MoiError(
+      ErrorCode.INVALID_ARGS,
+      `The interaction does not match what MOI Wallet expects — ${detail}`,
+    );
+  }
+  return result.data as unknown[];
+}
 
 async function defaultFactory(cfg: WcConfig): Promise<SignClientLike> {
   const client = await SignClient.init({

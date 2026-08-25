@@ -227,3 +227,73 @@ describe("@walletconnect/sign-client interop", () => {
     expect(typeof mod.SignClient?.init).toBe("function");
   });
 });
+
+describe("wire-shape validation (schema.ts §4)", () => {
+  const good = {
+    sender: { id: "0xabc", sequence: 0, key_id: 0 },
+    fuel_price: 1,
+    fuel_limit: 200,
+    ix_operations: [{ type: 5, payload: { callsite: "Transfer" } }],
+  };
+
+  async function paired(client: SignClientLike, envStyle?: string) {
+    const prev = process.env["MOI_WC_PARAM_STYLE"];
+    if (envStyle) process.env["MOI_WC_PARAM_STYLE"] = envStyle;
+    else delete process.env["MOI_WC_PARAM_STYLE"];
+    const wc = new WalletConnectClient(cfg(), async () => client);
+    const session = await (await wc.pair()).approval;
+    return { wc, session, restore: () => {
+      if (prev === undefined) delete process.env["MOI_WC_PARAM_STYLE"];
+      else process.env["MOI_WC_PARAM_STYLE"] = prev;
+    } };
+  }
+
+  it("sends the positional InteractionObject by default", async () => {
+    const client = fakeClient();
+    const { wc, session, restore } = await paired(client);
+    await wc.sendInteraction(session, good as never);
+    const req = (client.request as ReturnType<typeof vi.fn>).mock.calls[0]![0] as
+      { request: { params: unknown[] } };
+    expect(req.request.params).toEqual([good]);
+    restore();
+  });
+
+  it("sends the POLO ix_args form when MOI_WC_PARAM_STYLE=ix_args", async () => {
+    const client = fakeClient();
+    const { wc, session, restore } = await paired(client, "ix_args");
+    await wc.sendInteraction(session, good as never, { poloHex: "0e9f02ab", description: "Transfer 1 X" });
+    const req = (client.request as ReturnType<typeof vi.fn>).mock.calls[0]![0] as
+      { request: { params: Array<{ ix_args: string; meta?: { description?: string } }> } };
+    expect(req.request.params[0]!.ix_args).toBe("0e9f02ab");
+    expect(req.request.params[0]!.meta?.description).toBe("Transfer 1 X");
+    restore();
+  });
+
+  it("refuses a 0x-prefixed ix_args — the wallet expects bare POLO hex", async () => {
+    const { wc, session, restore } = await paired(fakeClient(), "ix_args");
+    await expect(
+      wc.sendInteraction(session, good as never, { poloHex: "0x0e9f02ab" }),
+    ).rejects.toMatchObject({ code: "INVALID_ARGS" });
+    restore();
+  });
+
+  it("rejects a malformed interaction locally, before the relay sees it", async () => {
+    const client = fakeClient();
+    const { wc, session, restore } = await paired(client);
+    const bad = { ...good, sender: { id: "not-hex", sequence: 0, key_id: 0 } };
+    await expect(wc.sendInteraction(session, bad as never)).rejects.toMatchObject({
+      code: "INVALID_ARGS",
+    });
+    // Nothing was sent to the phone.
+    expect((client.request as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+    restore();
+  });
+
+  it("explains itself when ix_args style is selected without an encoding", async () => {
+    const { wc, session, restore } = await paired(fakeClient(), "ix_args");
+    await expect(wc.sendInteraction(session, good as never)).rejects.toMatchObject({
+      code: "INVALID_ARGS",
+    });
+    restore();
+  });
+});

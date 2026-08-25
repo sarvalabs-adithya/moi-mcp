@@ -220,31 +220,129 @@ export const WcRequiredNamespaces = z.object({
 });
 
 /**
- * Request param for moi.sendInteractions.
- * The wallet signs AND broadcasts; returns hash.
- * ix_args encoding: CONFIRM against Dapp-docs (POLO-encoded hex vs JSON object).
+ * TWO TRANSPORTS CARRY A MOI INTERACTION. Conflating them breaks the write path.
+ *
+ *   A. dapp -> MOI Wallet, over WalletConnect  <- this is us
+ *      The wallet receives the plain, unsigned `InteractionObject`, passed
+ *      POSITIONALLY as a one-element `params` array.
+ *      Evidence: sarvalabs/wallet-connect-dapp `src/contexts/JsonRpcContext.tsx`
+ *      calls `client.request({ ..., request: { method: "moi.sendInteractions",
+ *      params: [assetContext] } })` where `assetContext = await
+ *      builder.ixData(senderInfo)`, typed `Promise<InteractionObject>`.
+ *
+ *   B. MOI Wallet -> MOI node, over JSON-RPC   <- NOT us
+ *      `moi.SendInteractions` takes `{ ix_args, signatures }`, where `ix_args`
+ *      is POLO-encoded UNPREFIXED hex.
+ *      Evidence: js-moi-wallet `signInteraction` returns
+ *      `{ ix_args: bytesToHex(serializeIxObject(ixObject)),
+ *         signatures: bytesToHex(serializeIxSignatures(signatures)) }`.
+ *
+ * We send form A by default. Form B is retained below because no public doc
+ * gives a literal request body for `moi.sendInteractions`, so if the wallet
+ * turns out to want the encoded form, MOI_WC_PARAM_STYLE=ix_args switches to it
+ * with no code change. See PLAN.md open question 1.
  */
-export const WcSendInteractionsParams = z.object({
-  ix_args: z.union([z.string(), z.record(z.string(), z.unknown())]),
-  /** Optional UI hints the wallet may render. */
-  meta: z
-    .object({
-      dappName: z.string().default("MOI MCP Server"),
-      description: z.string().optional(),   // "Transfer 50 MOI to pricefeed-01"
-    })
-    .optional(),
+
+/** POLO-encoded hex. UNPREFIXED — bytesToHex emits no "0x" and the node's
+ *  documented ix_args is bare hex. Adding a prefix breaks the wallet. */
+export const PoloHex = z.string().regex(/^[0-9a-fA-F]+$/, "expected unprefixed POLO hex");
+
+export const WcSender = z.object({
+  id: HexId,
+  sequence: z.number(),
+  key_id: z.number(),
 });
 
-export const WcSendInteractionsResult = z.object({
-  hash: InteractionHash,
+export const WcFund = z.object({
+  asset_id: AssetId,
+  /** Serialised as a decimal string; the wire also accepts a number. */
+  amount: z.union([z.string(), z.number()]),
 });
 
-/** Request param for moi.signInteraction (v2 feature: sign-only, we broadcast). */
+export const WcParticipant = z.object({
+  id: HexId,
+  /** LockType: 0 MUTATE_LOCK, 1 READ_LOCK, 2 NO_LOCK. */
+  lock_type: z.number(),
+  notary: z.boolean().optional(),
+});
+
+export const WcIxOperation = z.object({
+  /** OpType — 4 ASSET_CREATE, 5 ASSET_INVOKE, 12 LOGIC_INVOKE. */
+  type: z.number(),
+  payload: z.record(z.string(), z.unknown()),
+});
+
+/**
+ * The unsigned interaction, mirroring js-moi-sdk's `InteractionObject`.
+ *
+ * Structural only: the three-operation cap is node policy, enforced by
+ * ix-builder's assertSendable rather than by the wire shape.
+ */
+export const WcInteractionObject = z.object({
+  sender: WcSender,
+  payer: HexId.optional(),
+  fuel_price: z.union([z.number(), z.string()]),
+  fuel_limit: z.number(),
+  funds: z.array(WcFund).optional(),
+  ix_operations: z.array(WcIxOperation),
+  participants: z.array(WcParticipant).optional(),
+  preferences: z.record(z.string(), z.unknown()).optional(),
+  perception: HexId.optional(),
+});
+
+/** Optional UI hints. Whether the wallet renders these is undocumented. */
+export const WcMeta = z.object({
+  dappName: z.string().default("MOI MCP Server"),
+  description: z.string().optional(),   // "Transfer 50 MOI to pricefeed-01"
+});
+
+/** DEFAULT (form A): `params: [ixObject]`. */
+export const WcSendInteractionsParams = z.tuple([WcInteractionObject]);
+
+/** ALTERNATE (form B), selected by MOI_WC_PARAM_STYLE=ix_args. */
+export const WcSendInteractionsParamsIxArgs = z.tuple([
+  z.object({ ix_args: PoloHex, meta: WcMeta.optional() }),
+]);
+
+/** Either form — what the client validates against before sending. */
+export const WcSendInteractionsParamsAny = z.union([
+  WcSendInteractionsParams,
+  WcSendInteractionsParamsIxArgs,
+]);
+
+/**
+ * Response to moi.sendInteractions.
+ *
+ * NOT DOCUMENTED. The wallet docs say only "Transaction hash" in prose, and the
+ * reference dapp types the result as an opaque `string`. We accept a bare hash
+ * or an object carrying one under any plausible key; see wc/client.ts
+ * extractHash, which fails loudly rather than inventing a hash.
+ */
+export const WcSendInteractionsResult = z.union([
+  InteractionHash,
+  z.object({ hash: InteractionHash }),
+  z.object({ ix_hash: InteractionHash }),
+  z.object({ interaction_hash: InteractionHash }),
+]);
+
+/**
+ * moi.signInteraction — sign only, the dapp broadcasts. Same two param forms.
+ * Unused in v1 (see PLAN.md Phase 5) but kept in step with send.
+ */
 export const WcSignInteractionParams = WcSendInteractionsParams;
+export const WcSignInteractionParamsIxArgs = WcSendInteractionsParamsIxArgs;
+export const WcSignInteractionParamsAny = WcSendInteractionsParamsAny;
 
+/**
+ * The "signed interaction payload" the docs describe in prose. This is exactly
+ * js-moi-sdk's `InteractionRequest`: `{ ix_args: string; signatures: string }`.
+ *
+ * Note `signatures`, plural — an interaction can carry one signature per
+ * registered key, and js-moi-wallet builds an array before serialising them.
+ */
 export const WcSignInteractionResult = z.object({
-  ix_args: z.union([z.string(), z.record(z.string(), z.unknown())]),
-  signature: z.string(),
+  ix_args: PoloHex,
+  signatures: PoloHex,
 });
 
 // ---------------------------------------------------------------------------
