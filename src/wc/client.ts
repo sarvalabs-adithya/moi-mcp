@@ -21,7 +21,7 @@ import {
   WcSendInteractionsParamsIxArgs,
   type Network,
 } from "../schema.js";
-import type { UnsignedInteraction } from "../moi/ix-builder.js";
+import { toWireJson, type UnsignedInteraction } from "../moi/ix-builder.js";
 import { NETWORKS } from "../moi/provider.js";
 import { clearSession, loadSession, saveSession, type Session } from "./session.js";
 
@@ -243,7 +243,9 @@ export class WalletConnectClient {
         },
       ]);
     } else {
-      params = parseParams(WcSendInteractionsParams, [ix]);
+      // Convert bigints before validating or sending: they are valid POLO
+      // values but cannot cross a JSON transport.
+      params = parseParams(WcSendInteractionsParams, [toWireJson(ix)]);
     }
 
     this.pending += 1;

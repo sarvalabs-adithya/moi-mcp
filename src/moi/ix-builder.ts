@@ -230,6 +230,30 @@ export function assertSendable(ix: UnsignedInteraction): void {
 }
 
 /**
+ * Render an interaction as JSON-safe values for the WalletConnect wire.
+ *
+ * The two encodings disagree about numbers. POLO requires number|bigint for
+ * amounts; JSON cannot represent a bigint at all — JSON.stringify throws
+ * "Do not know how to serialize a BigInt", which the relay surfaces as an
+ * opaque request failure. So we keep bigint internally (toPoloHex needs it)
+ * and convert only at the transport boundary.
+ *
+ * Values beyond Number.MAX_SAFE_INTEGER become decimal strings rather than
+ * silently losing precision — MOI supplies can exceed 2^53.
+ */
+export function toWireJson(ix: UnsignedInteraction): Record<string, unknown> {
+  return JSON.parse(
+    JSON.stringify(ix, (_key, value: unknown) =>
+      typeof value === "bigint"
+        ? value <= BigInt(Number.MAX_SAFE_INTEGER)
+          ? Number(value)
+          : value.toString()
+        : value,
+    ),
+  ) as Record<string, unknown>;
+}
+
+/**
  * POLO-encode to the node-level `ix_args` hex. Mirrors js-moi-wallet's
  * serializeIxObject using only public exports — and without a key, since
  * encoding and signing are separate steps.

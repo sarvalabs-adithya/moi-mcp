@@ -17,6 +17,7 @@ import {
   MAX_OPERATIONS,
   parseAmount,
   toPoloHex,
+  toWireJson,
   type SenderInfo,
 } from "../../src/moi/ix-builder.js";
 import { MoiError } from "../../src/moi-error.js";
@@ -206,5 +207,47 @@ describe("estimateFuelFor", () => {
       expect(r.estimated).toBe(false);
       expect(r.fuelLimit).toBe(200_000);
     }
+  });
+});
+
+describe("toWireJson — the bigint/JSON boundary", () => {
+  /**
+   * Regression for a live failure. POLO requires number|bigint for amounts,
+   * but the WalletConnect transport is JSON and JSON.stringify throws on
+   * bigint — the relay surfaced it only as an opaque request failure.
+   */
+  it("survives JSON.stringify, which the raw interaction does not", () => {
+    const ix = buildCreateAsset(SENDER, {
+      symbol: "MCPTEST", supply: 1000n, dimension: 0, standard: "MAS0", isStateful: false, isFungible: true,
+    });
+    expect(() => JSON.stringify(ix)).toThrow(/BigInt/);
+    expect(() => JSON.stringify(toWireJson(ix))).not.toThrow();
+  });
+
+  it("keeps safe integers as numbers", () => {
+    const ix = buildCreateAsset(SENDER, {
+      symbol: "T", supply: 1000n, dimension: 0, standard: "MAS0", isStateful: false, isFungible: true,
+    });
+    const ops = toWireJson(ix)["ix_operations"] as Array<{ payload: Record<string, unknown> }>;
+    expect(ops[0]!.payload["max_supply"]).toBe(1000);
+  });
+
+  it("promotes past-2^53 values to strings instead of losing precision", () => {
+    const ix = buildCreateAsset(SENDER, {
+      symbol: "BIG", supply: 2n ** 70n, dimension: 0, standard: "MAS0", isStateful: false, isFungible: true,
+    });
+    const ops = toWireJson(ix)["ix_operations"] as Array<{ payload: Record<string, unknown> }>;
+    expect(ops[0]!.payload["max_supply"]).toBe("1180591620717411303424");
+  });
+
+  it("converts fund amounts too", () => {
+    const ix = buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1000n });
+    const funds = toWireJson(ix)["funds"] as Array<{ amount: unknown }>;
+    expect(funds[0]!.amount).toBe(1000);
+  });
+
+  it("leaves POLO encoding untouched — it still needs the bigint", () => {
+    const ix = buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1000n });
+    expect(() => toPoloHex(ix)).not.toThrow();
   });
 });

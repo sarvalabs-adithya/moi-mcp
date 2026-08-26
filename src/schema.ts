@@ -255,7 +255,10 @@ export const WcSender = z.object({
 
 export const WcFund = z.object({
   asset_id: AssetId,
-  /** Serialised as a decimal string; the wire also accepts a number. */
+  /**
+   * Number, or a decimal string past 2^53. Never a bigint: this crosses a
+   * JSON transport, and JSON.stringify throws on bigint.
+   */
   amount: z.union([z.string(), z.number()]),
 });
 
