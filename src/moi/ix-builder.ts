@@ -37,7 +37,21 @@ import { ErrorCode } from "../schema.js";
 export const MAX_OPERATIONS = 3;
 
 export const DEFAULT_FUEL_PRICE = 1;
+
+/**
+ * Fallback ceiling, used only when estimation fails.
+ *
+ * Deliberately not a tight number: it is a MAXIMUM, and the point of the
+ * fallback is that we could not measure. Real estimates are ~300 fuel for a
+ * transfer, so anything we build normally uses estimateFuelFor() below —
+ * a fuel_limit three orders of magnitude above the real cost is alarming on
+ * the wallet's approval screen, which is the one place a human is checking.
+ */
 export const DEFAULT_FUEL_LIMIT = 200_000;
+
+/** Headroom over the measured estimate, for state that shifts between
+ *  estimation and execution. */
+export const FUEL_MARGIN = 1.5;
 
 export interface SenderInfo {
   /** Participant id of the account that will sign — the paired wallet. */
@@ -58,7 +72,8 @@ export interface UnsignedInteraction {
   fuel_limit: number;
   ix_operations: Array<{ type: number; payload: Record<string, unknown> }>;
   participants?: Array<{ id: string; lock_type: number; notary: boolean }>;
-  funds?: Array<{ asset_id: string; amount: string }>;
+  /** bigint, not a decimal string — POLO rejects strings here. */
+  funds?: Array<{ asset_id: string; amount: bigint }>;
 }
 
 /**
@@ -105,7 +120,7 @@ export function buildTransfer(
 
   return {
     ...base(sender, options),
-    funds: [{ asset_id: params.assetId, amount: params.amount.toString() }],
+    funds: [{ asset_id: params.assetId, amount: params.amount }],
     ix_operations: [{ type: OpType.ASSET_INVOKE, payload: payload as unknown as Record<string, unknown> }],
     participants: [{ id: params.to, lock_type: LockType.MUTATE_LOCK, notary: false }],
   };
@@ -137,10 +152,13 @@ export function buildCreateAsset(
     ix_operations: [
       {
         type: OpType.ASSET_CREATE,
+        // Field names and types come from js-moi-sdk's AssetCreatePayload.
+        // max_supply must be a number|bigint — a decimal string fails POLO
+        // serialisation inside the wallet with "Failed to sign interaction",
+        // and there is no `supply` field at all.
         payload: {
           symbol: params.symbol,
-          supply: params.supply.toString(),
-          max_supply: params.supply.toString(),
+          max_supply: params.supply,
           dimension: params.dimension,
           standard: standardCode,
           enable_events: params.isStateful,
@@ -169,6 +187,33 @@ export function buildLogicInvoke(
       },
     ],
   };
+}
+
+/**
+ * Measure the fuel an interaction needs, with headroom.
+ *
+ * Falls back to DEFAULT_FUEL_LIMIT when the node cannot simulate — asset
+ * creation currently reverts during estimation on devnet, and refusing to
+ * build the interaction over that would be worse than overestimating.
+ */
+export async function estimateFuelFor(
+  estimator: { estimateFuel: (ix: unknown) => Promise<number | bigint> },
+  ix: UnsignedInteraction,
+): Promise<{ fuelLimit: number; estimated: boolean; reason?: string }> {
+  try {
+    const raw = await estimator.estimateFuel(ix);
+    const measured = Number(raw);
+    if (!Number.isFinite(measured) || measured <= 0) {
+      return { fuelLimit: DEFAULT_FUEL_LIMIT, estimated: false, reason: "node returned no usable estimate" };
+    }
+    return { fuelLimit: Math.ceil(measured * FUEL_MARGIN), estimated: true };
+  } catch (err) {
+    return {
+      fuelLimit: DEFAULT_FUEL_LIMIT,
+      estimated: false,
+      reason: err instanceof Error ? err.message.slice(0, 120) : String(err),
+    };
+  }
 }
 
 /** Reject anything the node would reject anyway, with a clearer message. */

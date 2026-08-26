@@ -343,15 +343,38 @@ export function extractHash(raw: unknown): string {
 
 const REJECTION = /reject|denied|declined|user closed|cancell?ed/i;
 
+/**
+ * The wallet failed on its own terms rather than the user declining.
+ * "Failed to sign interaction" is js-moi-sdk's own throw string — MOI Wallet
+ * uses the SDK internally, so seeing it means OUR payload broke the wallet's
+ * POLO serialisation. Reporting that as "you rejected it" sends the user
+ * hunting for a phone tap that never happened.
+ */
+const WALLET_FAILURE =
+  /failed to sign|failed to serial|invalid request|invalid interaction|unsupported|malformed|is required/i;
+
 /** Map WalletConnect's error vocabulary onto ours. */
 export function translateWcError(err: unknown): MoiError {
   if (err instanceof MoiError) return err;
   const message = err instanceof Error ? err.message : String(err);
   const code = (err as { code?: number } | undefined)?.code;
 
+  // Check wallet-side failures FIRST: they can arrive under code 5000, which
+  // would otherwise be misread as a user rejection.
+  if (WALLET_FAILURE.test(message)) {
+    return new MoiError(
+      ErrorCode.INVALID_ARGS,
+      `MOI Wallet could not process the interaction: "${firstLine(message)}". ` +
+        `This is a malformed payload, not a rejection — you did not decline anything.`,
+    );
+  }
+
   // 5000/4001 are the conventional user-rejected codes.
   if (code === 5000 || code === 4001 || REJECTION.test(message)) {
-    return new MoiError(ErrorCode.USER_REJECTED, "You rejected the interaction on your phone.");
+    return new MoiError(
+      ErrorCode.USER_REJECTED,
+      `You rejected the interaction on your phone. (wallet said: "${firstLine(message)}")`,
+    );
   }
   if (/expired|no matching key|session topic doesn't exist/i.test(message)) {
     return new MoiError(

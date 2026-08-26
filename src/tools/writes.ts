@@ -11,7 +11,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { getConfig } from "../config.js";
+import { getConfig, log } from "../config.js";
 import { toMcpError } from "../errors.js";
 import { isMoiError, MoiError } from "../moi-error.js";
 import {
@@ -20,9 +20,11 @@ import {
   buildLogicInvoke,
   buildTransfer,
   encodeLogicCall,
+  estimateFuelFor,
   parseAmount,
   toPoloHex,
   type SenderInfo,
+  type UnsignedInteraction,
 } from "../moi/ix-builder.js";
 import { getProvider, getReadOnlySigner, interactionUrl } from "../moi/provider.js";
 import { getAccount, getAsset, toBigInt } from "../moi/reads.js";
@@ -39,6 +41,22 @@ import { requireSession } from "../wc/session.js";
 import { walletClient } from "./wallet.js";
 
 type Write = z.infer<typeof WriteResult>;
+
+/**
+ * Replace the built-in fuel ceiling with a measured one.
+ *
+ * A fuel_limit far above the real cost is the number a human sees on the
+ * approval screen, so an unmeasured default reads as though the interaction
+ * is enormous.
+ */
+async function withMeasuredFuel(ix: UnsignedInteraction): Promise<UnsignedInteraction> {
+  const provider = getProvider(providerOptions()) as unknown as {
+    estimateFuel: (i: unknown) => Promise<number | bigint>;
+  };
+  const { fuelLimit, estimated, reason } = await estimateFuelFor(provider, ix);
+  if (!estimated) log("info", `fuel estimation unavailable (${reason}); using fallback ${fuelLimit}`);
+  return { ...ix, fuel_limit: fuelLimit };
+}
 
 function providerOptions() {
   const cfg = getConfig();
@@ -144,7 +162,9 @@ export function registerWriteTools(server: McpServer): void {
           );
         }
 
-        const ix = buildTransfer(await senderFor(session.account), { to, assetId, amount: raw });
+        const ix = await withMeasuredFuel(
+          buildTransfer(await senderFor(session.account), { to, assetId, amount: raw }),
+        );
         assertSendable(ix);
 
         const hash = await wc.sendInteraction(session, ix, {
@@ -181,14 +201,16 @@ export function registerWriteTools(server: McpServer): void {
         const wc = walletClient();
         const session = requireSession(await wc.currentSession(), cfg.MOI_NETWORK);
 
-        const ix = buildCreateAsset(await senderFor(session.account), {
-          symbol,
-          supply: parseAmount(supply, dimension),
-          dimension,
-          standard,
-          isStateful,
-          isFungible,
-        });
+        const ix = await withMeasuredFuel(
+          buildCreateAsset(await senderFor(session.account), {
+            symbol,
+            supply: parseAmount(supply, dimension),
+            dimension,
+            standard,
+            isStateful,
+            isFungible,
+          }),
+        );
         assertSendable(ix);
 
         const hash = await wc.sendInteraction(session, ix, {
@@ -259,11 +281,13 @@ export function registerWriteTools(server: McpServer): void {
           routine,
           args,
         );
-        const ix = buildLogicInvoke(await senderFor(valid.account), {
-          logicId,
-          callsite: routine,
-          ...(payload.calldata ? { calldata: payload.calldata } : {}),
-        });
+        const ix = await withMeasuredFuel(
+          buildLogicInvoke(await senderFor(valid.account), {
+            logicId,
+            callsite: routine,
+            ...(payload.calldata ? { calldata: payload.calldata } : {}),
+          }),
+        );
         assertSendable(ix);
 
         const hash = await wc.sendInteraction(valid, ix, {

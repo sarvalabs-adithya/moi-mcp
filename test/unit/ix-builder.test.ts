@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSendable,
   buildCreateAsset,
+  estimateFuelFor,
   buildLogicInvoke,
   buildTransfer,
   MAX_OPERATIONS,
@@ -69,8 +70,8 @@ describe("buildTransfer", () => {
     ]);
   });
 
-  it("declares the funds moved", () => {
-    expect(ix.funds).toEqual([{ asset_id: asset.toHex(), amount: "1000" }]);
+  it("declares the funds moved, as bigint not string", () => {
+    expect(ix.funds).toEqual([{ asset_id: asset.toHex(), amount: 1000n }]);
   });
 });
 
@@ -82,6 +83,10 @@ describe("buildCreateAsset", () => {
     expect(ix.ix_operations[0]!.type).toBe(OpType.ASSET_CREATE);
     expect(ix.ix_operations[0]!.payload["standard"]).toBe(AssetStandard.MAS0);
     expect(ix.ix_operations[0]!.payload["manager"]).toBe(sender.toHex());
+    // max_supply must be bigint, and there is no `supply` field in
+    // AssetCreatePayload — a string here fails POLO inside the wallet.
+    expect(typeof ix.ix_operations[0]!.payload["max_supply"]).toBe("bigint");
+    expect(ix.ix_operations[0]!.payload).not.toHaveProperty("supply");
   });
 
   it("rejects an unknown standard", () => {
@@ -147,5 +152,59 @@ describe("toPoloHex", () => {
     const a = toPoloHex(buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1000n }));
     const b = toPoloHex(buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1001n }));
     expect(a).not.toBe(b);
+  });
+});
+
+
+describe("every builder POLO-encodes", () => {
+  /**
+   * Regression for a live failure: buildCreateAsset emitted max_supply as a
+   * decimal string plus a bogus `supply` field. POLO rejected it inside MOI
+   * Wallet, which surfaced as "Failed to sign interaction" on the phone —
+   * js-moi-sdk's own throw string, since the wallet uses the SDK internally.
+   *
+   * The old tests only POLO-encoded transfers, so nothing caught it. Encoding
+   * is the contract with the wallet: every builder must pass.
+   */
+  const REGISTRY = "0x20000000c684f926ed158d0cbfe66af0e482a389393e7899a5a73fcb00000000";
+
+  const builders: Array<[string, () => ReturnType<typeof buildTransfer>]> = [
+    ["transfer", () => buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1000n })],
+    ["createAsset", () => buildCreateAsset(SENDER, {
+      symbol: "MCPTEST", supply: 1000n, dimension: 0, standard: "MAS0", isStateful: false, isFungible: true,
+    })],
+    ["logicInvoke", () => buildLogicInvoke(SENDER, { logicId: REGISTRY, callsite: "GetAgentCount" })],
+  ];
+
+  for (const [name, make] of builders) {
+    it(`${name} produces valid POLO bytes`, () => {
+      const hex = toPoloHex(make());
+      expect(hex).toMatch(/^[0-9a-f]+$/);
+      expect(hex.length).toBeGreaterThan(50);
+    });
+  }
+});
+
+describe("estimateFuelFor", () => {
+  it("applies headroom to a measured estimate", async () => {
+    const r = await estimateFuelFor({ estimateFuel: async () => 299 }, {} as never);
+    expect(r).toEqual({ fuelLimit: Math.ceil(299 * 1.5), estimated: true });
+  });
+
+  it("falls back when the node cannot simulate, and says why", async () => {
+    const r = await estimateFuelFor(
+      { estimateFuel: async () => { throw new Error("ReceiptStateReverted"); } }, {} as never,
+    );
+    expect(r.estimated).toBe(false);
+    expect(r.fuelLimit).toBe(200_000);
+    expect(r.reason).toMatch(/Reverted/);
+  });
+
+  it("falls back on a nonsense estimate rather than sending fuel_limit 0", async () => {
+    for (const bad of [0, -1, Number.NaN]) {
+      const r = await estimateFuelFor({ estimateFuel: async () => bad }, {} as never);
+      expect(r.estimated).toBe(false);
+      expect(r.fuelLimit).toBe(200_000);
+    }
   });
 });
