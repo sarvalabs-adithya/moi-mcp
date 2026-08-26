@@ -302,21 +302,27 @@ export const WcMeta = z.object({
 /**
  * DEFAULT (form A): `params: [accountId, ixObject]` — TWO positional args.
  *
- * Determined empirically against MOI Wallet 2026-08-26; no public doc gives a
- * literal body. `params: [ixObject]` alone is answered with
- * "Invalid request: account id is required", and the reference dapp's
- * `moi.sign` uses the same two-positional shape (`params: [address, message]`).
+ * UNCONFIRMED. `params: [ixObject]` alone is answered with "Invalid request:
+ * account id is required", so an account is clearly mandatory, and the
+ * reference dapp's `moi.sign` uses a two-positional shape
+ * (`params: [address, message]`). But no shape we have tried has yet produced
+ * an approval prompt: the wallet answers this one with the same "account id is
+ * required" after 60-190 seconds.
+ *
+ * Beware of probing this with a short timeout — the wallet's rejection is slow,
+ * so "no reply yet" reads as acceptance and is not. See PLAN.md open question 1;
+ * this needs the private Dapp-docs or a definitive answer from Sarva Labs.
  */
 export const WcSendInteractionsParams = z.tuple([HexId, WcInteractionObject]);
 
 /**
  * ALTERNATE (form B), selected by MOI_WC_PARAM_STYLE=ix_args.
  *
- * `accountId` is required, and it is CAMEL CASE — the wallet rejects
- * `account_id`, `account`, and `address` alike with "Invalid request: account
- * id is required". That breaks MOI's own snake_case convention (`ix_args`,
- * `fuel_price`, `key_id`), so it is easy to get wrong. Verified by probing the
- * live wallet 2026-08-26.
+ * An account is required — the wallet answers every payload lacking one with
+ * "Invalid request: account id is required". Which key it wants is UNKNOWN:
+ * `account`, `address` and `account_id` were all rejected quickly, while
+ * `accountId` merely took longer to be rejected. Do not read the slow
+ * rejection as acceptance. See PLAN.md open question 1.
  */
 export const WcSendInteractionsParamsIxArgs = z.tuple([
   z.object({ accountId: HexId, ix_args: PoloHex, meta: WcMeta.optional() }),
