@@ -260,6 +260,15 @@ export class WalletConnectClient {
       );
       return extractHash(raw);
     } catch (err) {
+      // Log the raw shape once: the translated message is for the agent, but
+      // an unrecognised wallet error is only debuggable from the original.
+      try {
+        process.stderr.write(
+          `[moi-mcp] debug: raw wallet error ${JSON.stringify(err, Object.getOwnPropertyNames(Object(err))).slice(0, 500)}\n`,
+        );
+      } catch {
+        /* never let diagnostics break the error path */
+      }
       throw translateWcError(err);
     } finally {
       this.pending -= 1;
@@ -298,7 +307,33 @@ async function defaultFactory(cfg: WcConfig): Promise<SignClientLike> {
 
 /** Relay errors arrive with stack traces attached; keep the first line only. */
 function firstLine(message: string): string {
-  return (message.split("\n")[0] ?? message).trim().slice(0, 160);
+  return (message.split("\n")[0] ?? message).trim().slice(0, 240);
+}
+
+/**
+ * Get a readable message out of whatever the relay threw.
+ *
+ * WalletConnect rejects with plain objects as often as with Errors — often
+ * `{ code, message }` or `{ error: { code, message } }`. String(err) on those
+ * yields "[object Object]", which discards the only diagnostic the wallet
+ * gave us.
+ */
+export function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    const o = err as Record<string, unknown>;
+    const nested = (o["error"] ?? o["data"]) as Record<string, unknown> | undefined;
+    for (const candidate of [o["message"], nested?.["message"], o["reason"], nested?.["reason"]]) {
+      if (typeof candidate === "string" && candidate.trim() !== "") return candidate;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -358,8 +393,10 @@ const WALLET_FAILURE =
 /** Map WalletConnect's error vocabulary onto ours. */
 export function translateWcError(err: unknown): MoiError {
   if (err instanceof MoiError) return err;
-  const message = err instanceof Error ? err.message : String(err);
-  const code = (err as { code?: number } | undefined)?.code;
+  const message = describeError(err);
+  const o = (err ?? {}) as Record<string, unknown>;
+  const nested = (o["error"] ?? o["data"]) as Record<string, unknown> | undefined;
+  const code = (o["code"] ?? nested?.["code"]) as number | undefined;
 
   // Check wallet-side failures FIRST: they can arrive under code 5000, which
   // would otherwise be misread as a user rejection.

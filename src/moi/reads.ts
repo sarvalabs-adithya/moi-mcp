@@ -86,6 +86,16 @@ export async function getAccount(
     throw asRpcError(err, `moi.AccountState(${address})`);
   }
 
+  // AccountState carries no `nonce` field despite the SDK's type claiming one
+  // — the node simply does not return it, so reading it yields undefined and
+  // silently reports 0. The real counter is the per-key interaction count.
+  let nonce = 0;
+  try {
+    nonce = Number(toBigInt(await provider.getInteractionCount(address, 0)));
+  } catch {
+    // Non-fatal: an unregistered account has no count.
+  }
+
   // A participant with no state has never been registered on chain.
   let isRegistered = true;
   try {
@@ -108,9 +118,10 @@ export async function getAccount(
     throw asRpcError(err, `moi.TDU(${address})`);
   }
 
+  void state;
   return {
     address,
-    nonce: Number(toBigInt(state.nonce)),
+    nonce,
     balances,
     isRegistered,
   };

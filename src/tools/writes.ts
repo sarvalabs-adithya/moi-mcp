@@ -63,10 +63,21 @@ function providerOptions() {
   return { network: cfg.MOI_NETWORK, rpcUrl: cfg.MOI_RPC_URL };
 }
 
-/** Resolve the paired account's current interaction count. */
-async function senderFor(account: string): Promise<SenderInfo> {
-  const state = await getAccount(getProvider(providerOptions()), account);
-  return { id: account, sequence: state.nonce, keyId: 0 };
+/**
+ * Resolve the sequence number the chain expects next.
+ *
+ * This must match what js-moi-sdk's Signer.getNonce() would produce —
+ * getPendingInteractionCount(id, keyId), which counts queued interactions too.
+ * Reading AccountState.nonce instead yields undefined (the node does not
+ * return that field), which silently becomes 0 and the wallet rejects the
+ * interaction with "invalid nonce".
+ */
+async function senderFor(account: string, keyId = 0): Promise<SenderInfo> {
+  const provider = getProvider(providerOptions()) as unknown as {
+    getPendingInteractionCount: (id: string, keyId: number) => Promise<number | bigint>;
+  };
+  const sequence = Number(await provider.getPendingInteractionCount(account, keyId));
+  return { id: account, sequence, keyId };
 }
 
 /**
