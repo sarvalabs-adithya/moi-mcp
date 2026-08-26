@@ -299,12 +299,27 @@ export const WcMeta = z.object({
   description: z.string().optional(),   // "Transfer 50 MOI to pricefeed-01"
 });
 
-/** DEFAULT (form A): `params: [ixObject]`. */
-export const WcSendInteractionsParams = z.tuple([WcInteractionObject]);
+/**
+ * DEFAULT (form A): `params: [accountId, ixObject]` — TWO positional args.
+ *
+ * Determined empirically against MOI Wallet 2026-08-26; no public doc gives a
+ * literal body. `params: [ixObject]` alone is answered with
+ * "Invalid request: account id is required", and the reference dapp's
+ * `moi.sign` uses the same two-positional shape (`params: [address, message]`).
+ */
+export const WcSendInteractionsParams = z.tuple([HexId, WcInteractionObject]);
 
-/** ALTERNATE (form B), selected by MOI_WC_PARAM_STYLE=ix_args. */
+/**
+ * ALTERNATE (form B), selected by MOI_WC_PARAM_STYLE=ix_args.
+ *
+ * `accountId` is required, and it is CAMEL CASE — the wallet rejects
+ * `account_id`, `account`, and `address` alike with "Invalid request: account
+ * id is required". That breaks MOI's own snake_case convention (`ix_args`,
+ * `fuel_price`, `key_id`), so it is easy to get wrong. Verified by probing the
+ * live wallet 2026-08-26.
+ */
 export const WcSendInteractionsParamsIxArgs = z.tuple([
-  z.object({ ix_args: PoloHex, meta: WcMeta.optional() }),
+  z.object({ accountId: HexId, ix_args: PoloHex, meta: WcMeta.optional() }),
 ]);
 
 /** Either form — what the client validates against before sending. */

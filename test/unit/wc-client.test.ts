@@ -131,8 +131,8 @@ describe("sendInteraction", () => {
     };
     expect(req.request.method).toBe("moi.sendInteractions");
     expect(req.chainId).toBe("moi:14");
-    expect(req.request.params).toEqual([ix]);          // positional, not {ix_args}
-    expect(req.request.params[0]).not.toHaveProperty("ix_args");
+    expect(req.request.params).toEqual([ix.sender.id, ix]); // [accountId, ixObject]
+    expect(req.request.params[1]).not.toHaveProperty("ix_args");
   });
 
   it("maps a user rejection to USER_REJECTED", async () => {
@@ -258,7 +258,7 @@ describe("wire-shape validation (schema.ts §4)", () => {
     await wc.sendInteraction(session, good as never);
     const req = (client.request as ReturnType<typeof vi.fn>).mock.calls[0]![0] as
       { request: { params: unknown[] } };
-    expect(req.request.params).toEqual([good]);
+    expect(req.request.params).toEqual([good.sender.id, good]);
     restore();
   });
 
@@ -267,8 +267,9 @@ describe("wire-shape validation (schema.ts §4)", () => {
     const { wc, session, restore } = await paired(client, "ix_args");
     await wc.sendInteraction(session, good as never, { poloHex: "0e9f02ab", description: "Transfer 1 X" });
     const req = (client.request as ReturnType<typeof vi.fn>).mock.calls[0]![0] as
-      { request: { params: Array<{ ix_args: string; meta?: { description?: string } }> } };
+      { request: { params: Array<{ ix_args: string; accountId: string; meta?: { description?: string } }> } };
     expect(req.request.params[0]!.ix_args).toBe("0e9f02ab");
+    expect((req.request.params[0] as unknown as { accountId: string }).accountId).toBe(good.sender.id);
     expect(req.request.params[0]!.meta?.description).toBe("Transfer 1 X");
     restore();
   });

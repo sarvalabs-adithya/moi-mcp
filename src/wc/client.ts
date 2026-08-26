@@ -235,6 +235,7 @@ export class WalletConnectClient {
       }
       params = parseParams(WcSendInteractionsParamsIxArgs, [
         {
+          accountId: ix.sender.id,
           ix_args: opts.poloHex,
           meta: {
             dappName: METADATA.name,
@@ -245,7 +246,7 @@ export class WalletConnectClient {
     } else {
       // Convert bigints before validating or sending: they are valid POLO
       // values but cannot cross a JSON transport.
-      params = parseParams(WcSendInteractionsParams, [toWireJson(ix)]);
+      params = parseParams(WcSendInteractionsParams, [ix.sender.id, toWireJson(ix)]);
     }
 
     this.pending += 1;
@@ -388,7 +389,7 @@ const REJECTION = /reject|denied|declined|user closed|cancell?ed/i;
  * hunting for a phone tap that never happened.
  */
 const WALLET_FAILURE =
-  /failed to sign|failed to serial|invalid request|invalid interaction|unsupported|malformed|is required/i;
+  /failed to (sign|serial|create|build)|invalid request|invalid interaction|unsupported|malformed|is required|constraint failed|finalizeasync/i;
 
 /** Map WalletConnect's error vocabulary onto ours. */
 export function translateWcError(err: unknown): MoiError {
