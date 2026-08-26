@@ -122,8 +122,13 @@ export class WalletConnectClient {
     let uri: string | undefined;
     let approval: () => Promise<unknown>;
     try {
+      // optionalNamespaces, not requiredNamespaces: WalletConnect deprecated
+      // the latter and silently moves it to the former before the proposal
+      // reaches the wallet, so "required" never meant required. We therefore
+      // verify the wallet actually granted the moi chain after approval —
+      // toSession() throws if the session carries no moi account.
       ({ uri, approval } = await client.connect({
-        requiredNamespaces: {
+        optionalNamespaces: {
           [WC_NAMESPACE]: {
             chains: [chainId],
             methods: [...WC_METHODS],

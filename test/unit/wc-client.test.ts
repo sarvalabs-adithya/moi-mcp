@@ -59,9 +59,12 @@ describe("pairing", () => {
     const wc = new WalletConnectClient(cfg(), async () => client);
     await wc.pair();
     const args = (client.connect as ReturnType<typeof vi.fn>).mock.calls[0]![0] as {
-      requiredNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+      optionalNamespaces: Record<string, { chains: string[]; methods: string[]; events: string[] }>;
+      requiredNamespaces?: unknown;
     };
-    const ns = args.requiredNamespaces[WC_NAMESPACE]!;
+    // requiredNamespaces is deprecated; WalletConnect moves it to optional anyway.
+    expect(args.requiredNamespaces).toBeUndefined();
+    const ns = args.optionalNamespaces[WC_NAMESPACE]!;
     expect(ns.chains).toEqual(["moi:14"]);
     expect(ns.methods).toEqual(["moi.signInteraction", "moi.sendInteractions"]);
     expect(ns.events).toEqual(["accountsChanged", "chainChanged"]);
