@@ -22,6 +22,7 @@ import {
   encodeLogicCall,
   estimateFuelFor,
   parseAmount,
+  simulate,
   toPoloHex,
   type SenderInfo,
   type UnsignedInteraction,
@@ -49,6 +50,27 @@ type Write = z.infer<typeof WriteResult>;
  * approval screen, so an unmeasured default reads as though the interaction
  * is enormous.
  */
+/**
+ * Refuse to push an interaction that the node says will revert.
+ *
+ * Without this the user is asked to approve something on their phone that then
+ * burns fuel and fails — the worst outcome, because it looks like their
+ * approval caused the failure.
+ */
+async function assertWillSucceed(ix: UnsignedInteraction): Promise<void> {
+  const provider = getProvider(providerOptions()) as unknown as { call: (i: unknown) => Promise<unknown> };
+  const result = await simulate(provider, ix);
+  if (result.ok) return;
+
+  throw new MoiError(
+    ErrorCode.INVALID_ARGS,
+    `The node says this interaction would fail (receipt status ${result.status ?? "?"})` +
+      `${result.detail ? `: ${result.detail}` : ""}. ` +
+      `Not sending it to your wallet — approving it would burn fuel and change nothing.`,
+    { simulatedStatus: result.status ?? null },
+  );
+}
+
 async function withMeasuredFuel(ix: UnsignedInteraction): Promise<UnsignedInteraction> {
   const provider = getProvider(providerOptions()) as unknown as {
     estimateFuel: (i: unknown) => Promise<number | bigint>;
@@ -177,6 +199,7 @@ export function registerWriteTools(server: McpServer): void {
           buildTransfer(await senderFor(session.account), { to, assetId, amount: raw }),
         );
         assertSendable(ix);
+        await assertWillSucceed(ix);
 
         const hash = await wc.sendInteraction(session, ix, {
           description: `Transfer ${amount} ${asset.symbol || assetId} to ${to}${memo ? ` — ${memo}` : ""}`,
@@ -223,6 +246,7 @@ export function registerWriteTools(server: McpServer): void {
           }),
         );
         assertSendable(ix);
+        await assertWillSucceed(ix);
 
         const hash = await wc.sendInteraction(session, ix, {
           description: `Create asset ${symbol} with supply ${supply}`,
@@ -300,6 +324,7 @@ export function registerWriteTools(server: McpServer): void {
           }),
         );
         assertSendable(ix);
+        await assertWillSucceed(ix);
 
         const hash = await wc.sendInteraction(valid, ix, {
           description: `Call ${routine} on logic ${logicId}`,

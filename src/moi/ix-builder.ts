@@ -190,6 +190,43 @@ export function buildLogicInvoke(
 }
 
 /**
+ * Dry-run an interaction against the node before a human is asked to approve it.
+ *
+ * `provider.call` executes the interaction in simulation and returns a receipt.
+ * A receipt status other than 0 means it would revert on chain — burning fuel
+ * and achieving nothing. Catching that here means the user is never shown an
+ * approval for an interaction that cannot succeed.
+ */
+export async function simulate(
+  caller: { call: (ix: unknown) => Promise<unknown> },
+  ix: UnsignedInteraction,
+): Promise<{ ok: boolean; status?: number; fuelUsed?: number; detail?: string }> {
+  let receipt: Record<string, unknown>;
+  try {
+    const response = (await caller.call(ix)) as { receipt?: Record<string, unknown> };
+    receipt = response?.receipt ?? {};
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message.slice(0, 200) : String(err) };
+  }
+
+  const status = Number(BigInt(String(receipt["status"] ?? 0)));
+  const fuelUsed = Number(BigInt(String(receipt["fuel_used"] ?? 0)));
+  if (status === 0) return { ok: true, status, fuelUsed };
+
+  // Surface any per-operation error the node bothered to fill in.
+  const ops = (receipt["ix_operations"] ?? []) as Array<Record<string, unknown>>;
+  const opDetail = ops
+    .map((o) => {
+      const data = (o["data"] ?? {}) as Record<string, unknown>;
+      const err = String(data["error"] ?? "");
+      return err && err !== "0x" ? err : `op status ${String(o["status"])}`;
+    })
+    .join("; ");
+
+  return { ok: false, status, fuelUsed, detail: opDetail };
+}
+
+/**
  * Measure the fuel an interaction needs, with headroom.
  *
  * Falls back to DEFAULT_FUEL_LIMIT when the node cannot simulate — asset
