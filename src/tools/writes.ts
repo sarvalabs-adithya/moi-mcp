@@ -55,7 +55,7 @@ type Write = z.infer<typeof WriteResult>;
  * burns fuel and fails — the worst outcome, because it looks like their
  * approval caused the failure.
  */
-async function assertWillSucceed(ix: UnsignedInteraction): Promise<void> {
+async function assertWillSucceed(ix: UnsignedInteraction, hint?: string): Promise<void> {
   const provider = getProvider(providerOptions()) as unknown as { call: (i: unknown) => Promise<unknown> };
   const result = await simulate(provider, ix);
   if (result.ok) return;
@@ -64,7 +64,8 @@ async function assertWillSucceed(ix: UnsignedInteraction): Promise<void> {
     ErrorCode.INVALID_ARGS,
     `The node says this interaction would fail (receipt status ${result.status ?? "?"})` +
       `${result.detail ? `: ${result.detail}` : ""}. ` +
-      `Not sending it to your wallet — approving it would burn fuel and change nothing.`,
+      `Not sending it to your wallet — approving it would burn fuel and change nothing.` +
+      (hint ? ` ${hint}` : ""),
     { simulatedStatus: result.status ?? null },
   );
 }
@@ -262,7 +263,7 @@ export function registerWriteTools(server: McpServer): void {
       outputSchema: WriteOutputShape,
       annotations: WRITE_ANNOTATIONS,
     },
-    async ({ symbol, supply, dimension, standard, isStateful, isFungible }) => {
+    async ({ symbol, supply, dimension, standard, isStateful, isFungible, storageFund }) => {
       try {
         const cfg = getConfig();
         const wc = walletClient();
@@ -276,10 +277,16 @@ export function registerWriteTools(server: McpServer): void {
             standard,
             isStateful,
             isFungible,
+            ...(storageFund ? { storageFund: parseAmount(storageFund, 0) } : {}),
           }),
         );
         assertSendable(ix);
-        await assertWillSucceed(ix);
+        await assertWillSucceed(
+          ix,
+          `A new asset must be funded with KMOI to pay its own storage (default ` +
+            `1000000). Pass a smaller \`storageFund\` if your balance cannot cover it — ` +
+            `below roughly 10000 the asset cannot pay for storage at all.`,
+        );
 
         const hash = await signAndBroadcast(session, ix, `Create asset ${symbol} with supply ${supply}`);
 

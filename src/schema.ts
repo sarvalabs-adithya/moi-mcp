@@ -183,6 +183,13 @@ export const TransferInput = z.object({
 export const CreateAssetInput = z.object({
   symbol: z.string().min(1).max(12),
   supply: Amount,
+  /**
+   * KMOI to fund the new asset with so it can pay its own storage. Omitted,
+   * this defaults to 1,000,000 (js-moi-constants' DEFAULT_STORAGE_FUND).
+   * Too little and the interaction fails; more than you hold and the funding
+   * transfer fails.
+   */
+  storageFund: Amount.optional(),
   dimension: z.number().int().min(0).max(18).default(0),
   standard: z.string().default("MAS0"),
   isStateful: z.boolean().default(false),

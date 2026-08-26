@@ -2,6 +2,7 @@ import {
   AssetStandard,
   createParticipantId,
   deriveAssetId,
+  KMOI_ASSET_ID,
   LockType,
   OpType,
   ParticipantTagV0,
@@ -11,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSendable,
   buildCreateAsset,
+  DEFAULT_STORAGE_FUND,
   estimateFuelFor,
   buildLogicInvoke,
   buildTransfer,
@@ -260,5 +262,56 @@ describe("toWireJson — the bigint/JSON boundary", () => {
   it("leaves POLO encoding untouched — it still needs the bigint", () => {
     const ix = buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1000n });
     expect(() => toPoloHex(ix)).not.toThrow();
+  });
+});
+
+describe("asset creation funds the new asset", () => {
+  /**
+   * A bare ASSET_CREATE does not work. MOI makes a new asset self-pay for its
+   * storage at creation, and the derived asset account holds no KMOI, so the
+   * create must be bundled with a transfer to the id it is about to produce.
+   *
+   * The failure mode is nasty: the ASSET_CREATE operation reports success and
+   * returns a valid asset_id while the interaction fails with status 1 and no
+   * diagnostic.
+   */
+  const make = (storageFund?: bigint) =>
+    buildCreateAsset(SENDER, {
+      symbol: "MCPTEST", supply: 1000n, dimension: 0, standard: "MAS0",
+      isStateful: false, isFungible: true, ...(storageFund ? { storageFund } : {}),
+    });
+
+  it("emits ASSET_CREATE plus a funding transfer", () => {
+    const ix = make();
+    expect(ix.ix_operations).toHaveLength(2);
+    expect(ix.ix_operations[0]!.type).toBe(OpType.ASSET_CREATE);
+    expect(ix.ix_operations[1]!.type).toBe(OpType.ASSET_INVOKE);
+    expect(ix.ix_operations[1]!.payload["callsite"]).toBe("Transfer");
+  });
+
+  it("funds the asset id the create will actually produce", () => {
+    // deriveAssetId mirrors the chain's derivation; a wrong prediction sends
+    // KMOI to an account that will never exist.
+    const expected = deriveAssetId(
+      { id: SENDER.id as `0x${string}`, sequence: SENDER.sequence, key_id: 0 },
+      AssetStandard.MAS0,
+    ).toHex();
+    expect(make().ix_operations[1]!.payload["asset_id"]).toBe(KMOI_ASSET_ID);
+    expect(String(make().ix_operations[1]!.payload["calldata"])).toContain(expected.slice(2));
+  });
+
+  it("defaults to DEFAULT_STORAGE_FUND and honours an override", () => {
+    expect(DEFAULT_STORAGE_FUND).toBe(1_000_000n);
+    // Different funding amounts must produce different calldata.
+    expect(make(10_000n).ix_operations[1]!.payload["calldata"])
+      .not.toBe(make(50_000n).ix_operations[1]!.payload["calldata"]);
+  });
+
+  it("still POLO-encodes with both operations", () => {
+    expect(() => toPoloHex(make(10_000n))).not.toThrow();
+  });
+
+  it("stays within the three-operation cap", () => {
+    expect(() => assertSendable(make())).not.toThrow();
   });
 });

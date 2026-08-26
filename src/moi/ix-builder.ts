@@ -23,6 +23,8 @@ import {
   AssetStandard,
   bytesToHex,
   buildTransferPayload,
+  deriveAssetId,
+  KMOI_ASSET_ID,
   ixObjectSchema,
   LockType,
   OpType,
@@ -147,6 +149,25 @@ export function buildTransfer(
   };
 }
 
+/**
+ * Default KMOI sent to a newly created asset so it can pay for its own
+ * storage. Mirrors js-moi-constants' DEFAULT_STORAGE_FUND.
+ */
+export const DEFAULT_STORAGE_FUND = 1_000_000n;
+
+/**
+ * Build an asset creation.
+ *
+ * A bare ASSET_CREATE operation does NOT work: MOI makes a new asset self-pay
+ * for its storage the moment it is created, and a freshly derived asset
+ * account holds no KMOI. The create must be bundled with a transfer funding
+ * the asset id it is about to produce — which means predicting that id, via
+ * deriveAssetId, before it exists.
+ *
+ * Symptom if you skip it: the ASSET_CREATE operation reports success and
+ * returns a valid asset_id while the interaction as a whole fails with
+ * status 1 and no diagnostic.
+ */
 export function buildCreateAsset(
   sender: SenderInfo,
   params: {
@@ -156,6 +177,8 @@ export function buildCreateAsset(
     standard: string;
     isStateful: boolean;
     isFungible: boolean;
+    /** KMOI to fund the new asset with. Too little and storage fails. */
+    storageFund?: bigint;
   },
   options: BuildOptions = {},
 ): UnsignedInteraction {
@@ -167,6 +190,21 @@ export function buildCreateAsset(
       { standard: params.standard },
     );
   }
+
+  // Predict the asset id this create will produce so the funding transfer can
+  // address it. deriveAssetId mirrors the chain's own derivation — a wrong
+  // prediction sends the funds to an account that will never exist.
+  const assetId = deriveAssetId(
+    { id: sender.id as `0x${string}`, sequence: sender.sequence, key_id: sender.keyId ?? 0 },
+    standardCode,
+  ).toHex();
+
+  const fund = params.storageFund ?? DEFAULT_STORAGE_FUND;
+  const funding = buildTransferPayload(
+    KMOI_ASSET_ID as `0x${string}`,
+    assetId as `0x${string}`,
+    fund <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(fund) : fund,
+  ) as unknown as Record<string, unknown>;
 
   return {
     ...base(sender, options),
@@ -184,6 +222,15 @@ export function buildCreateAsset(
           standard: standardCode,
           enable_events: params.isStateful,
           manager: sender.id,
+        },
+      },
+      // Without this the ASSET_CREATE operation succeeds and the interaction
+      // still fails: the new asset has no KMOI to pay its own storage.
+      {
+        type: OpType.ASSET_INVOKE,
+        payload: {
+          ...funding,
+          calldata: String(funding["calldata"] ?? "").replace(/^0x/, ""),
         },
       },
     ],
