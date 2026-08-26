@@ -71,7 +71,7 @@ export interface UnsignedInteraction {
   fuel_price: number;
   fuel_limit: number;
   ix_operations: Array<{ type: number; payload: Record<string, unknown> }>;
-  participants?: Array<{ id: string; lock_type: number; notary: boolean }>;
+  participants?: Array<{ id: string; lock_type: number; notary?: boolean }>;
   /** bigint, not a decimal string — POLO rejects strings here. */
   funds?: Array<{ asset_id: string; amount: bigint }>;
 }
@@ -112,17 +112,38 @@ export function buildTransfer(
   params: { to: string; assetId: string; amount: bigint },
   options: BuildOptions = {},
 ): UnsignedInteraction {
+  // POLO encodes a bigint full-width but a number compactly, so `1n` and `1`
+  // produce different calldata for the same value. The SDK's own builder
+  // passes a number; match it wherever the amount fits one.
+  const amount =
+    params.amount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(params.amount) : params.amount;
+
   const payload = buildTransferPayload(
     params.assetId as `0x${string}`,
     params.to as `0x${string}`,
-    params.amount,
+    amount,
   );
+
+  // Shape matched against js-moi-sdk's own MAS0AssetLogic().transfer().ixData(),
+  // which is what the reference dapp sends. Three things differ from the
+  // obvious hand-rolled version and all of them matter:
+  //   - no `funds` block; the transfer amount lives in the calldata
+  //   - the ASSET is declared as a second, NO_LOCK participant
+  //   - calldata carries no 0x prefix
+  const calldata = String((payload as { calldata?: string }).calldata ?? "").replace(/^0x/, "");
 
   return {
     ...base(sender, options),
-    funds: [{ asset_id: params.assetId, amount: params.amount }],
-    ix_operations: [{ type: OpType.ASSET_INVOKE, payload: payload as unknown as Record<string, unknown> }],
-    participants: [{ id: params.to, lock_type: LockType.MUTATE_LOCK, notary: false }],
+    ix_operations: [
+      {
+        type: OpType.ASSET_INVOKE,
+        payload: { ...(payload as unknown as Record<string, unknown>), calldata },
+      },
+    ],
+    participants: [
+      { id: params.to, lock_type: LockType.MUTATE_LOCK },
+      { id: params.assetId, lock_type: LockType.NO_LOCK },
+    ],
   };
 }
 

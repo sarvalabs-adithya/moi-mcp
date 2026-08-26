@@ -19,6 +19,7 @@ import {
   WC_METHODS,
   WcSendInteractionsParams,
   WcSendInteractionsParamsIxArgs,
+  WcSignInteractionResult,
   type Network,
 } from "../schema.js";
 import { toWireJson, type UnsignedInteraction } from "../moi/ix-builder.js";
@@ -211,8 +212,68 @@ export class WalletConnectClient {
   }
 
   /**
+   * Ask the wallet to sign, and return the signed payload for us to broadcast.
+   *
+   * This is the primary write path. `moi.sendInteractions` — where the wallet
+   * signs AND broadcasts — is broken in MOI Wallet as of 2026-08-26: it fails
+   * with "Calling the 'finalizeAsync' function has failed → NOT NULL
+   * constraint failed: interactions_metadata.number_of_operations", a SQLite
+   * error from inside the wallet's own database. That reproduces with a
+   * payload built by the SDK's own MAS0AssetLogic builder, i.e. byte-for-byte
+   * what the official reference dapp sends, so it is a wallet bug rather than
+   * a malformed request.
+   *
+   * `moi.signInteraction` works. We broadcast the result via the node's
+   * moi.SendInteractions, which keeps the zero-key property intact: the
+   * signature is produced on the phone and we only relay it.
+   */
+  async signInteraction(
+    session: Session,
+    ix: UnsignedInteraction,
+    opts: { description?: string } = {},
+  ): Promise<{ ix_args: string; signatures: string }> {
+    const client = await this.init();
+    void opts;
+
+    this.pending += 1;
+    try {
+      const raw = await withTimeout(
+        client.request<unknown>({
+          topic: session.topic,
+          chainId: session.chainId,
+          request: { method: "moi.signInteraction", params: [toWireJson(ix)] },
+        }),
+        this.config.requestTimeoutMs,
+      );
+
+      const parsed = WcSignInteractionResult.safeParse(raw);
+      if (!parsed.success) {
+        throw new MoiError(
+          ErrorCode.RPC_ERROR,
+          `MOI Wallet signed the interaction but returned an unexpected payload: ${JSON.stringify(raw)?.slice(0, 200)}`,
+        );
+      }
+      return parsed.data;
+    } catch (err) {
+      try {
+        process.stderr.write(
+          `[moi-mcp] debug: raw wallet error ${JSON.stringify(err, Object.getOwnPropertyNames(Object(err))).slice(0, 400)}\n`,
+        );
+      } catch {
+        /* diagnostics must never break the error path */
+      }
+      throw translateWcError(err);
+    } finally {
+      this.pending -= 1;
+    }
+  }
+
+  /**
    * Send an unsigned interaction to the phone and wait for the user.
    * Returns the interaction hash the wallet reports after broadcasting.
+   *
+   * NOTE: broken in MOI Wallet — see signInteraction above. Retained because
+   * it is the documented method and should be preferred once fixed.
    */
   async sendInteraction(
     session: Session,

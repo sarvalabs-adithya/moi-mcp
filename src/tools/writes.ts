@@ -23,7 +23,6 @@ import {
   estimateFuelFor,
   parseAmount,
   simulate,
-  toPoloHex,
   type SenderInfo,
   type UnsignedInteraction,
 } from "../moi/ix-builder.js";
@@ -37,7 +36,6 @@ import {
   TransferInput,
   WriteResult,
 } from "../schema.js";
-import { paramStyle } from "../wc/client.js";
 import { requireSession } from "../wc/session.js";
 import { walletClient } from "./wallet.js";
 
@@ -144,6 +142,40 @@ const WriteOutputShape = {
   code: z.string().optional(),
 };
 
+/**
+ * The write path: sign on the phone, broadcast from here.
+ *
+ * Splitting sign from broadcast is what makes writes work at all right now —
+ * the wallet's combined sendInteractions is broken (see wc/client.ts). It also
+ * keeps the zero-key property: the signature is produced on the phone and this
+ * process only relays it to the node.
+ */
+async function signAndBroadcast(
+  session: Parameters<typeof requireSession>[0] extends undefined ? never : NonNullable<ReturnType<typeof requireSession>>,
+  ix: UnsignedInteraction,
+  description: string,
+): Promise<string> {
+  const signed = await walletClient().signInteraction(session, ix, { description });
+
+  const provider = getProvider(providerOptions()) as unknown as {
+    sendInteraction: (req: { ix_args: string; signatures: string }) => Promise<{ hash: string }>;
+  };
+  try {
+    const response = await provider.sendInteraction(signed);
+    const hash = response?.hash;
+    if (typeof hash !== "string" || !/^0x[0-9a-fA-F]+$/.test(hash)) {
+      throw new MoiError(ErrorCode.RPC_ERROR, `Node accepted the interaction but returned no hash.`);
+    }
+    return hash;
+  } catch (err) {
+    if (err instanceof MoiError) throw err;
+    throw new MoiError(
+      ErrorCode.RPC_ERROR,
+      `You approved the interaction but broadcasting it failed: ${err instanceof Error ? err.message.slice(0, 180) : String(err)}`,
+    );
+  }
+}
+
 function ok(value: Write) {
   // Enforce the union even though the advertised schema is the superset.
   const checked = WriteResult.parse(value);
@@ -201,10 +233,11 @@ export function registerWriteTools(server: McpServer): void {
         assertSendable(ix);
         await assertWillSucceed(ix);
 
-        const hash = await wc.sendInteraction(session, ix, {
-          description: `Transfer ${amount} ${asset.symbol || assetId} to ${to}${memo ? ` — ${memo}` : ""}`,
-          ...(paramStyle() === "ix_args" ? { poloHex: toPoloHex(ix) } : {}),
-        });
+        const hash = await signAndBroadcast(
+          session,
+          ix,
+          `Transfer ${amount} ${asset.symbol || assetId} to ${to}${memo ? ` — ${memo}` : ""}`,
+        );
 
         return ok({
           status: "sent",
@@ -248,10 +281,7 @@ export function registerWriteTools(server: McpServer): void {
         assertSendable(ix);
         await assertWillSucceed(ix);
 
-        const hash = await wc.sendInteraction(session, ix, {
-          description: `Create asset ${symbol} with supply ${supply}`,
-          ...(paramStyle() === "ix_args" ? { poloHex: toPoloHex(ix) } : {}),
-        });
+        const hash = await signAndBroadcast(session, ix, `Create asset ${symbol} with supply ${supply}`);
 
         return ok({
           status: "sent",
@@ -326,10 +356,7 @@ export function registerWriteTools(server: McpServer): void {
         assertSendable(ix);
         await assertWillSucceed(ix);
 
-        const hash = await wc.sendInteraction(valid, ix, {
-          description: `Call ${routine} on logic ${logicId}`,
-          ...(paramStyle() === "ix_args" ? { poloHex: toPoloHex(ix) } : {}),
-        });
+        const hash = await signAndBroadcast(valid, ix, `Call ${routine} on logic ${logicId}`);
 
         return ok({
           status: "sent",

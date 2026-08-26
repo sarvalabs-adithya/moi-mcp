@@ -64,15 +64,24 @@ describe("buildTransfer", () => {
     expect(ix.ix_operations[0]!.payload["callsite"]).toBe("Transfer");
   });
 
-  it("declares the recipient as a mutating participant", () => {
+  it("declares the recipient AND the asset as participants", () => {
     // MOI sandboxes state: an account not declared here cannot be touched.
+    // The asset itself is a NO_LOCK participant — matched against the SDK's
+    // own MAS0AssetLogic builder, which is what the reference dapp sends.
     expect(ix.participants).toEqual([
-      { id: recipient.toHex(), lock_type: LockType.MUTATE_LOCK, notary: false },
+      { id: recipient.toHex(), lock_type: LockType.MUTATE_LOCK },
+      { id: asset.toHex(), lock_type: LockType.NO_LOCK },
     ]);
   });
 
-  it("declares the funds moved, as bigint not string", () => {
-    expect(ix.funds).toEqual([{ asset_id: asset.toHex(), amount: 1000n }]);
+  it("carries no funds block — the amount lives in the calldata", () => {
+    // The SDK builder omits `funds` for an asset transfer; including it is a
+    // divergence from what the wallet is known to accept.
+    expect(ix.funds).toBeUndefined();
+  });
+
+  it("emits calldata with no 0x prefix, as the SDK does", () => {
+    expect(String(ix.ix_operations[0]!.payload["calldata"])).toMatch(/^[0-9a-f]+$/);
   });
 });
 
@@ -240,10 +249,12 @@ describe("toWireJson — the bigint/JSON boundary", () => {
     expect(ops[0]!.payload["max_supply"]).toBe("1180591620717411303424");
   });
 
-  it("converts fund amounts too", () => {
-    const ix = buildTransfer(SENDER, { to: recipient.toHex(), assetId: asset.toHex(), amount: 1000n });
-    const funds = toWireJson(ix)["funds"] as Array<{ amount: unknown }>;
-    expect(funds[0]!.amount).toBe(1000);
+  it("converts bigint amounts in an asset-create payload", () => {
+    const ix = buildCreateAsset(SENDER, {
+      symbol: "T", supply: 10n ** 20n, dimension: 0, standard: "MAS0", isStateful: false, isFungible: true,
+    });
+    const ops = toWireJson(ix)["ix_operations"] as Array<{ payload: Record<string, unknown> }>;
+    expect(ops[0]!.payload["max_supply"]).toBe("100000000000000000000");
   });
 
   it("leaves POLO encoding untouched — it still needs the bigint", () => {
