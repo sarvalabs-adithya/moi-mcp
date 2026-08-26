@@ -1,7 +1,7 @@
 import { AssetStandard, createParticipantId, deriveAssetId, ParticipantTagV0 } from "js-moi-sdk";
 import { describe, expect, it } from "vitest";
 
-import { assetStandardName, normalizeAmount, toBigInt } from "../../src/moi/reads.js";
+import { assetStandardName, normalizeAmount, opTypeName, senderId, toBigInt } from "../../src/moi/reads.js";
 
 const participant = createParticipantId({
   fingerprint: new Uint8Array(24).fill(7),
@@ -81,5 +81,33 @@ describe("assetStandardName", () => {
 
   it("returns empty string for something that is not an asset id", () => {
     expect(assetStandardName("0xdeadbeef")).toBe("");
+  });
+});
+
+describe("interaction rendering", () => {
+  it("names the operation type instead of emitting a bare enum value", () => {
+    // An agent can act on "ASSET_INVOKE"; "5" tells it nothing.
+    expect(opTypeName(5)).toBe("ASSET_INVOKE");
+    expect(opTypeName("0x5")).toBe("ASSET_INVOKE");
+    expect(opTypeName(4)).toBe("ASSET_CREATE");
+    expect(opTypeName(12)).toBe("LOGIC_INVOKE");
+  });
+
+  it("falls back to the raw value for an unknown op", () => {
+    expect(opTypeName(999)).toBe("999");
+    expect(opTypeName(undefined)).toBe("unknown");
+  });
+
+  it("extracts the participant id from a sender object", () => {
+    // Regression: the interaction's `sender` is an object, and stringifying it
+    // produced the literal "[object Object]" in tool output.
+    expect(senderId({ id: "0xabc", sequence: 1, key_id: 0 })).toBe("0xabc");
+    expect(senderId("0xdef")).toBe("0xdef");
+    expect(senderId({ id: { toHex: () => "0x123" } })).toBe("0x123");
+  });
+
+  it("degrades to 0x0 rather than emitting garbage", () => {
+    expect(senderId(undefined)).toBe("0x0");
+    expect(senderId({})).toBe("0x0");
   });
 });

@@ -5,7 +5,7 @@
  * tool layer can hand the result straight to structuredContent.
  */
 
-import { AssetId, AssetStandard, type JsonRpcProvider } from "js-moi-sdk";
+import { AssetId, AssetStandard, OpType, type JsonRpcProvider } from "js-moi-sdk";
 import { z } from "zod";
 
 import { MoiError, asRpcError } from "../moi-error.js";
@@ -182,14 +182,19 @@ export async function getInteraction(
 
   const rawOps = (ix["ix_operations"] ?? ix["operations"] ?? []) as Array<Record<string, unknown>>;
   const operations = (Array.isArray(rawOps) ? rawOps : []).map((op) => ({
-    type: String(op["type"] ?? "unknown"),
-    payload: (op["payload"] ?? {}) as Record<string, unknown>,
+    // Name the op rather than emitting a bare enum value — an agent reading
+    // "ASSET_INVOKE" can act on it; "5" tells it nothing.
+    type: opTypeName(op["type"] ?? op["tx_type"]),
+    payload: (op["payload"] ?? op["data"] ?? {}) as Record<string, unknown>,
   }));
 
   const out: z.infer<typeof GetInteractionOutput> = {
     hash,
     status: receipt ? receiptStatus(receipt["status"]) : "pending",
-    sender: String(ix["sender"] ?? (ix["sender"] as never) ?? receipt?.["from"] ?? "0x0"),
+    // The interaction's `sender` is an object ({id, sequence, key_id}); the
+    // receipt's `from` is already the participant id. Prefer the latter and
+    // reach into the former rather than stringifying an object.
+    sender: senderId(receipt?.["from"] ?? ix["sender"]),
     operations,
   };
 
@@ -269,6 +274,27 @@ export function assetStandardName(assetId: string): string {
   } catch {
     return "";
   }
+}
+
+/** Map an OpType value onto its name, tolerating hex or decimal. */
+export function opTypeName(raw: unknown): string {
+  if (raw == null) return "unknown";
+  const code = Number(toBigInt(raw));
+  const name = (OpType as unknown as Record<number, string>)[code];
+  return name ?? String(raw);
+}
+
+/** Pull a participant id out of either a bare string or a sender object. */
+export function senderId(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object") {
+    const id = (raw as Record<string, unknown>)["id"];
+    if (typeof id === "string") return id;
+    if (id && typeof id === "object" && "toHex" in id) {
+      return (id as { toHex: () => string }).toHex();
+    }
+  }
+  return "0x0";
 }
 
 function safeJson(s: string): Record<string, unknown> | undefined {

@@ -1,13 +1,19 @@
 # @moi-protocol/mcp-server
 
-**Give your AI agent a MOI wallet — without giving it your keys.**
+**An MCP server for MOI. It publishes the schema, so an agent can construct the
+call.**
 
-An [MCP](https://modelcontextprotocol.io) server that lets Claude, Cursor, or any
-MCP client read [MOI](https://moi.technology) chain state and propose
-transactions. Every state change is signed on your phone in MOI Wallet over
-WalletConnect. The server holds zero private keys, and there is no code path
-from a tool call to a signing key — the only `Signer` it contains throws when
-asked to sign.
+That is the whole difference between this and the JSON-RPC endpoint you already
+have. With JSON-RPC you must already know the method names, the argument order,
+and the payload shape. MCP hands the agent a typed description of every
+operation, so it can work out the call itself — including MOI's own vocabulary,
+where an interaction is not a transaction and a tesseract is not a block.
+
+Reads need nothing but a network connection. For writes, the agent builds the
+interaction and your phone signs it: **this server holds no private keys and
+cannot sign.** The only `Signer` class in the codebase throws when asked. That
+is not a policy, it is the type system — adding a signing path would mean
+writing a new class, not passing a different argument.
 
 ```
 you: what's in my MOI wallet?
