@@ -126,7 +126,7 @@ export function registerWriteTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const wc = walletClient();
-        const session = requireSession(wc.session(), cfg.MOI_NETWORK);
+        const session = requireSession(await wc.currentSession(), cfg.MOI_NETWORK);
 
         const provider = getProvider(providerOptions());
         const asset = await getAsset(provider, assetId);
@@ -179,7 +179,7 @@ export function registerWriteTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const wc = walletClient();
-        const session = requireSession(wc.session(), cfg.MOI_NETWORK);
+        const session = requireSession(await wc.currentSession(), cfg.MOI_NETWORK);
 
         const ix = buildCreateAsset(await senderFor(session.account), {
           symbol,
@@ -222,7 +222,7 @@ export function registerWriteTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const wc = walletClient();
-        const session = wc.session();
+        const session = await wc.currentSession();
 
         // A view runs against the node directly — no wallet, no approval.
         if (kind === "view") {

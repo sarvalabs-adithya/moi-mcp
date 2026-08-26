@@ -73,7 +73,7 @@ export function registerWalletTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const wc = walletClient();
-        const existing = wc.session();
+        const existing = await wc.currentSession();
         const validity = checkValidity(existing, cfg.MOI_NETWORK);
 
         if (validity.valid && existing) {
@@ -144,7 +144,7 @@ export function registerWalletTools(server: McpServer): void {
       try {
         const cfg = getConfig();
         const wc = walletClient();
-        const session = wc.session();
+        const session = await wc.currentSession();
         const validity = checkValidity(session, cfg.MOI_NETWORK);
 
         // A syntactically odd project id still loads, but it will fail at the

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MoiError } from "../../src/moi-error.js";
 import {
+  accountsFrom,
   extractHash,
   paramStyle,
   toSession,
@@ -298,5 +299,59 @@ describe("wire-shape validation (schema.ts §4)", () => {
       code: "INVALID_ARGS",
     });
     restore();
+  });
+});
+
+describe("chain-keyed namespaces (real MOI Wallet response)", () => {
+  /**
+   * Captured verbatim from a real pairing on 2026-08-26. We request
+   * `{ moi: {...} }`; the wallet grants `{ "moi:14": {...} }`. Reading only
+   * `namespaces.moi` threw away a session the user had already approved.
+   */
+  const REAL_APPROVAL = {
+    topic: "f44cf69d0e0e8891feeade02d81e11414d6ca115f654b66a30a3af4fc26a66d4",
+    expiry: 1788325432,
+    peer: { metadata: { name: "MOI Wallet", url: "https://moi.technology" } },
+    namespaces: {
+      "moi:14": {
+        chains: ["moi:14"],
+        methods: ["moi.sendInteractions", "moi.signInteraction", "moi.sign"],
+        events: ["accountsChanged", "chainChanged"],
+        accounts: ["moi:14:0x000000001a46e49490bf4798eb0a09ac3a1fce7773d25ad53158320800000000"],
+      },
+    },
+  };
+
+  it("accepts a namespace keyed by the full CAIP-2 chain id", () => {
+    const s = toSession(REAL_APPROVAL, "voyage", "moi:14");
+    expect(s.account).toBe("0x000000001a46e49490bf4798eb0a09ac3a1fce7773d25ad53158320800000000");
+    expect(s.topic).toBe(REAL_APPROVAL.topic);
+    expect(s.peer.name).toBe("MOI Wallet");
+    expect(s.network).toBe("voyage");
+  });
+
+  it("still accepts the bare-namespace spelling", () => {
+    const bare = { ...REAL_APPROVAL, namespaces: { moi: REAL_APPROVAL.namespaces["moi:14"] } };
+    expect(toSession(bare, "voyage", "moi:14").account).toMatch(/^0x/);
+  });
+
+  it("prefers an account on the chain we asked for", () => {
+    const mixed = {
+      ...REAL_APPROVAL,
+      namespaces: {
+        "moi:99": { accounts: ["moi:99:0xbbb"] },
+        "moi:14": { accounts: ["moi:14:0xaaa"] },
+      },
+    };
+    expect(toSession(mixed, "voyage", "moi:14").account).toBe("0xaaa");
+  });
+
+  it("ignores namespaces belonging to other chains entirely", () => {
+    expect(accountsFrom({ eip155: { accounts: ["eip155:1:0xdead"] } }, "moi:14")).toEqual([]);
+  });
+
+  it("still refuses a session that grants no moi account", () => {
+    const empty = { ...REAL_APPROVAL, namespaces: { "moi:14": { accounts: [] } } };
+    expect(() => toSession(empty, "voyage", "moi:14")).toThrow(MoiError);
   });
 });

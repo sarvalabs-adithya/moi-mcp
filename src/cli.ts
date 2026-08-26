@@ -40,7 +40,7 @@ async function pair(): Promise<number> {
   const info = NETWORKS[cfg.MOI_NETWORK];
   const wc = clientFor();
 
-  const existing = wc.session();
+  const existing = await wc.currentSession();
   if (checkValidity(existing, cfg.MOI_NETWORK).valid && existing) {
     process.stdout.write(`Already paired with ${existing.account} on ${existing.network}.\n`);
     return 0;
@@ -67,9 +67,9 @@ async function pair(): Promise<number> {
   }
 }
 
-function status(): number {
+async function status(): Promise<number> {
   const cfg = getConfig();
-  const session = loadSession(cfg.home);
+  const session = (await clientFor().currentSession()) ?? loadSession(cfg.home);
   if (!session) {
     process.stdout.write("No wallet paired. Run `moi-mcp pair`.\n");
     return 1;
@@ -102,7 +102,7 @@ async function main(argv: string[]): Promise<number> {
         return await pair();
 
       case "status":
-        return status();
+        return await status();
 
       case "disconnect": {
         const had = await clientFor().disconnect("Disconnected from the CLI");

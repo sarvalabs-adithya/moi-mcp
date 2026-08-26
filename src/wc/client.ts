@@ -114,6 +114,38 @@ export class WalletConnectClient {
     return loadSession(this.config.home);
   }
 
+  /**
+   * Load our session, or adopt one WalletConnect is already holding.
+   *
+   * The two stores can diverge: SignClient persists its own session the moment
+   * the wallet approves, while ours is written afterwards. If that second step
+   * ever fails, the user has a live wallet session and we would otherwise ask
+   * them to pair again for nothing.
+   */
+  async currentSession(): Promise<Session | undefined> {
+    const own = this.session();
+    if (own) return own;
+
+    let client: SignClientLike;
+    try {
+      client = await this.init();
+    } catch {
+      return undefined;
+    }
+
+    const chainId = this.chainId();
+    for (const topic of client.session.keys ?? []) {
+      try {
+        const adopted = toSession(client.session.get(topic), this.config.network, chainId);
+        saveSession(this.config.home, adopted);
+        return adopted;
+      } catch {
+        // Not a MOI session, or unusable. Try the next.
+      }
+    }
+    return undefined;
+  }
+
   /** Start pairing. Returns the URI to render as a QR immediately. */
   async pair(): Promise<PairResult> {
     const client = await this.init();
@@ -330,6 +362,29 @@ export function translateWcError(err: unknown): MoiError {
   return new MoiError(ErrorCode.RPC_ERROR, `WalletConnect request failed: ${message}`);
 }
 
+/**
+ * Collect accounts across every namespace entry that belongs to us.
+ *
+ * CAIP-25 lets a wallet key the GRANTED namespaces differently from how they
+ * were requested. We request `{ moi: {...} }`; MOI Wallet responds with
+ * `{ "moi:14": {...} }`, keyed by the full CAIP-2 chain id. Reading only
+ * `namespaces.moi` finds nothing and throws away a perfectly good session,
+ * so accept both spellings.
+ */
+export function accountsFrom(
+  namespaces: Record<string, { accounts?: string[] }> | undefined,
+  chainId: string,
+): string[] {
+  const matched: string[] = [];
+  for (const [key, value] of Object.entries(namespaces ?? {})) {
+    if (key !== WC_NAMESPACE && !key.startsWith(`${WC_NAMESPACE}:`)) continue;
+    matched.push(...(value?.accounts ?? []));
+  }
+  // Prefer an account actually on the chain we asked for.
+  const onChain = matched.filter((a) => a.startsWith(`${chainId}:`));
+  return onChain.length > 0 ? onChain : matched;
+}
+
 /** Normalise the settled WalletConnect session into our on-disk shape. */
 export function toSession(raw: unknown, network: Network, chainId: string): Session {
   const s = raw as {
@@ -340,7 +395,7 @@ export function toSession(raw: unknown, network: Network, chainId: string): Sess
     namespaces?: Record<string, { accounts?: string[] }>;
   };
 
-  const accounts = s.namespaces?.[WC_NAMESPACE]?.accounts ?? [];
+  const accounts = accountsFrom(s.namespaces, chainId);
   // CAIP-10: "moi:14:0xabc..." — the account is the last colon-separated part.
   const account = accounts[0]?.split(":").pop() ?? "";
 
