@@ -25,6 +25,29 @@ you: send 50 MOI to the agent called pricefeed-01
      -> your phone buzzes. nothing moves until you tap Send.
 ```
 
+## Two transports
+
+| | stdio (local) | HTTP (hostable) |
+|---|---|---|
+| Tools | all 12 | the 6 read tools |
+| Wallet | yes | none |
+| Needs `WC_PROJECT_ID` | yes | no |
+| State | WalletConnect session | none |
+| Run as | child process of your MCP client | a service behind a URL |
+
+The split is forced by what a wallet needs. A WalletConnect session is a
+persistent relay socket and a pending approval waits up to five minutes for a
+phone tap — neither survives a stateless request/response service. So writes
+stay local, and reads run behind a URL.
+
+The HTTP half imports no wallet code at all, so the write path is unreachable
+over the network by construction rather than by configuration.
+
+```bash
+PORT=8787 npx @moi-protocol/mcp-server-http   # -> http://localhost:8787/mcp
+curl localhost:8787/health
+```
+
 ## Install
 
 ```json

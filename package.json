@@ -8,7 +8,8 @@
     "node": ">=20"
   },
   "bin": {
-    "moi-mcp": "dist/cli.js"
+    "moi-mcp": "dist/cli.js",
+    "moi-mcp-http": "dist/http.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -39,7 +40,9 @@
     "prepublishOnly": "npm run typecheck && npm run test && npm run build",
     "test:e2e": "MOI_E2E=1 vitest run test/e2e",
     "pair": "node dist/cli.js pair",
-    "status": "node dist/cli.js status"
+    "status": "node dist/cli.js status",
+    "dev:http": "tsx src/http.ts",
+    "start:http": "node dist/http.js"
   },
   "keywords": [
     "mcp",

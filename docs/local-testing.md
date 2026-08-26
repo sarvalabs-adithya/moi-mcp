@@ -16,6 +16,14 @@ That is deliberate, not a gap:
 A stateless serverless function dies on all three. Hosting is Phase 5 work and
 is scoped to a **read-only HTTP transport**, which has none of these problems.
 
+## Which transport
+
+`moi-mcp` (stdio) is the local one your MCP client spawns — all 12 tools,
+wallet included. `moi-mcp-http` is the read-only service — 6 tools, no wallet,
+no `WC_PROJECT_ID`, stateless, hostable. This page covers the stdio one; for
+the HTTP one, `PORT=8787 node dist/http.js` and point a client at
+`http://localhost:8787/mcp`.
+
 ## Build it
 
 ```bash
