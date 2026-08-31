@@ -113,6 +113,27 @@ constructor that exposes only the query methods.
 
 ---
 
+## 4. Four undocumented JSON-RPC details
+
+**Severity: hours of debugging each, for anyone not reading the SDK source.**
+
+Found while writing a second client in Go against the same endpoint. None is
+in the public JSON-RPC docs; all four are only discoverable by reading
+`js-moi-providers`.
+
+| Detail | What happens if you get it wrong |
+|---|---|
+| Params are wrapped: `params: [{...}]`, not positional | `empty options` |
+| The identifier key is `id`, not `identifier` | `invalid identifier` — reads like a bad address, not a wrong field name |
+| Most reads need an `options` block; `{"tesseract_number": -1}` means latest | `empty options`, even with a valid id |
+| Asset standard is in bytes 2..3 of the asset id | No `standard` field on `AssetInfo`; you assume it is missing data |
+
+The second one is the worst: `invalid identifier` sends you off validating the
+address you passed, when the address was fine and the *field name* was wrong.
+
+**Suggested fix:** one worked `curl` example per method in the JSON-RPC docs
+would close all four.
+
 ## Two smaller notes
 
 **Registry has no state on devnet.** The logic at
