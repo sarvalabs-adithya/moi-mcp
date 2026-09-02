@@ -33,7 +33,12 @@ export interface MountAuthOptions {
 
 export interface AuthHandle {
   authenticate(req: { headers: IncomingHttpHeaders }): AuthInfo | undefined;
-  challengeHeader(): string;
+  /**
+   * Default (no args): a token is missing/invalid — `error="invalid_token"`.
+   * Pass `{ error: "insufficient_scope", scope }` when a token was presented
+   * and verified but does not cover the tool being called (RFC 6750 §3.1).
+   */
+  challengeHeader(opts?: { error?: string; scope?: string }): string;
 }
 
 export function mountAuth(app: Express, opts: MountAuthOptions): AuthHandle {
@@ -63,8 +68,11 @@ export function mountAuth(app: Express, opts: MountAuthOptions): AuthHandle {
     return { userId: record.userId, clientId: record.clientId, scopes: record.scopes, expiresAt: record.expiresAt };
   }
 
-  function challengeHeader(): string {
-    return `Bearer error="invalid_token", error_description="Authorization required", resource_metadata="${publicUrl}/.well-known/oauth-protected-resource"`;
+  function challengeHeader(opts?: { error?: string; scope?: string }): string {
+    const error = opts?.error ?? "invalid_token";
+    const description = error === "insufficient_scope" ? "This action requires additional scope" : "Authorization required";
+    const scopePart = opts?.scope ? `, scope="${opts.scope}"` : "";
+    return `Bearer error="${error}", error_description="${description}", resource_metadata="${publicUrl}/.well-known/oauth-protected-resource"${scopePart}`;
   }
 
   return { authenticate, challengeHeader };

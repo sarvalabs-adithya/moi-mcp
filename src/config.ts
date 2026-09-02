@@ -181,8 +181,13 @@ export function loadHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
   }
 
   const dataDir = expandHome(parsed.data.MOI_DATA_DIR);
-  // 0700: this directory holds per-user WalletConnect session records, the
-  // OAuth client/token stores, and the write journal.
+  // 0700: this directory holds per-user WalletConnect session records
+  // (wc/store.ts's sessions/, keyed by sha256(userId)), the OAuth client/token
+  // stores, and the write journal. It also holds wc-relay-scratch/ — the
+  // shared, single-user WalletConnectClient's OWN internal session file
+  // (src/server.ts's makeResolveUri), which is NOT per-user and must never be
+  // read as if it were; per-user lookups always go through the sessions/
+  // store above.
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
   return { ...parsed.data, dataDir };

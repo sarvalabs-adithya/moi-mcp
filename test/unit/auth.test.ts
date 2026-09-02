@@ -323,6 +323,36 @@ describe("auth", () => {
     );
   });
 
+  it("includes client_secret_expires_at (RFC 7591 §3.2.1) whenever client_secret_post issues a secret", async () => {
+    const res = await fetch(`${base}/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        redirect_uris: [`${base}/cb`],
+        client_name: "Confidential Test Client",
+        token_endpoint_auth_method: "client_secret_post",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { client_secret?: string; client_secret_expires_at?: number };
+    expect(typeof body.client_secret).toBe("string");
+    // 0 = never expires, per RFC 7591 — matches ClientStore, which never checks a TTL.
+    expect(body.client_secret_expires_at).toBe(0);
+  });
+
+  it("omits client_secret_expires_at for a public (token_endpoint_auth_method=none) client", async () => {
+    const registered = await register(`${base}/cb`);
+    expect("client_secret" in registered).toBe(false);
+    expect("client_secret_expires_at" in registered).toBe(false);
+  });
+
+  it("builds challengeHeader({error, scope}) for an insufficient_scope challenge", () => {
+    expect(auth.challengeHeader({ error: "insufficient_scope", scope: "moi:write" })).toBe(
+      `Bearer error="insufficient_scope", error_description="This action requires additional scope", ` +
+        `resource_metadata="${base}/.well-known/oauth-protected-resource", scope="moi:write"`,
+    );
+  });
+
   it("rejects a registration whose redirect_uri is neither https nor loopback http", async () => {
     const res = await fetch(`${base}/register`, {
       method: "POST",

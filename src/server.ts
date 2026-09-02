@@ -28,8 +28,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express, { type Application, type Request, type Response } from "express";
-import { realpathSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 
@@ -62,6 +63,24 @@ export const GATED = [
   "moi_disconnect_wallet",
   "moi_wallet_status",
 ] as const;
+
+/**
+ * Scope required per gated tool. moi_wallet_status only reads the paired
+ * account, so a moi:read token covers it; every other gated tool either
+ * moves funds/writes chain state or mutates the wallet pairing itself
+ * (starting a new WalletConnect pairing, or tearing one down), so all of
+ * them require moi:write. Keyed off GATED so adding a tool there without an
+ * entry here is a compile error, not a silent unscoped gate.
+ */
+const REQUIRED_SCOPE: Record<(typeof GATED)[number], "moi:read" | "moi:write"> = {
+  moi_transfer: "moi:write",
+  moi_create_asset: "moi:write",
+  moi_mint: "moi:write",
+  moi_call_logic: "moi:write",
+  moi_connect_wallet: "moi:write",
+  moi_disconnect_wallet: "moi:write",
+  moi_wallet_status: "moi:read",
+};
 
 export interface HostedDeps {
   authenticate: AuthHandle["authenticate"];
@@ -102,13 +121,17 @@ function toolCallName(message: unknown): string | undefined {
   return typeof name === "string" ? name : undefined;
 }
 
-/** True when `body` (a single JSON-RPC message, or a batch of them) calls a gated tool. */
-function isGatedCall(body: unknown): boolean {
+/** Every gated tool name `body` (a single JSON-RPC message, or a batch of them) calls. */
+function gatedToolNames(body: unknown): Array<(typeof GATED)[number]> {
   const messages = Array.isArray(body) ? body : [body];
-  return messages.some((m) => {
+  const names: Array<(typeof GATED)[number]> = [];
+  for (const m of messages) {
     const name = toolCallName(m);
-    return name !== undefined && (GATED as readonly string[]).includes(name);
-  });
+    if (name !== undefined && (GATED as readonly string[]).includes(name)) {
+      names.push(name as (typeof GATED)[number]);
+    }
+  }
+  return names;
 }
 
 /** caip2 -> the network key NETWORKS lists it under, when it matches one we know. */
@@ -260,11 +283,30 @@ export function buildHostedApp(deps: HostedDeps): Application {
     // header is the only thing that does, so it must reach the client
     // untouched by the transport below.
     let auth: AuthInfo | undefined;
-    if (isGatedCall(body)) {
+    const gatedTools = gatedToolNames(body);
+    if (gatedTools.length > 0) {
       auth = deps.authenticate(req);
       if (!auth) {
         res.setHeader("WWW-Authenticate", deps.challengeHeader());
         send(res, 401, { error: "authorization required" });
+        return;
+      }
+
+      // SCOPE GATE. Presence of a valid token is not enough — a moi:read-only
+      // token must not be able to start/tear down a wallet pairing, transfer
+      // funds, etc. Answer with the RFC 6750 §3.1 shape (403 +
+      // error="insufficient_scope") so a client that understands scopes can
+      // re-request authorization with the missing one instead of looping on
+      // a 401 it can never resolve by re-presenting the same token.
+      const missingScope = gatedTools
+        .map((name) => REQUIRED_SCOPE[name])
+        .find((scope) => !auth!.scopes.includes(scope));
+      if (missingScope) {
+        res.setHeader("WWW-Authenticate", deps.challengeHeader({ error: "insufficient_scope", scope: missingScope }));
+        send(res, 403, {
+          error: "insufficient_scope",
+          error_description: `This action requires the '${missingScope}' scope.`,
+        });
         return;
       }
     }
@@ -319,15 +361,31 @@ export function buildHostedApp(deps: HostedDeps): Application {
  * at a time across every user. That is the same limitation PLAN-HOSTED.md §1
  * notes for the trunk (a real fix is src/wc/hub.ts, a shared SignClient keyed
  * by topic) — acceptable here, not fixed here.
+ *
+ * WalletConnectClient is single-user code (src/wc/client.ts) that always
+ * persists its OWN last-approved session to one un-keyed `<home>/session.json`
+ * (src/wc/session.ts), with no notion of which user paired. `home` here must
+ * therefore NEVER be `hosted.dataDir` — that is the multi-tenant root the
+ * per-user FileWalletSessionStore (`store`, keyed by sha256(userId), see
+ * wc/store.ts) also lives under, and letting the two coexist there invites a
+ * future caller to assume `wc`'s own session accessors (session(),
+ * currentSession(), disconnect()) are per-user when they are actually
+ * last-writer-wins across every user on this process. Point it at a
+ * dedicated, non-authoritative scratch directory instead: `store` (not `wc`)
+ * is the only thing any tool should ever read a specific user's session from.
+ * A future write-tool milestone resolving a session for `auth.userId` must
+ * load it from `store`, not from this shared client.
  */
 function makeResolveUri(
   cfg: ReturnType<typeof getConfig>,
   hosted: ReturnType<typeof getHostedConfig>,
   store: WalletSessionStore,
 ): (userId: string) => Promise<string> {
+  const wcHome = join(hosted.dataDir, "wc-relay-scratch");
+  mkdirSync(wcHome, { recursive: true, mode: 0o700 });
   const wc = new WalletConnectClient({
     projectId: cfg.WC_PROJECT_ID,
-    home: hosted.dataDir,
+    home: wcHome,
     network: cfg.MOI_NETWORK,
     requestTimeoutMs: hosted.HOSTED_TIMEOUT_MS,
   });

@@ -59,7 +59,7 @@ export class WriteJournal {
       timestamp: new Date().toISOString(),
     };
     const line = JSON.stringify(record);
-    appendFileSync(this.journalPath, `${line}\n`);
+    appendFileSync(this.journalPath, `${line}\n`, { mode: 0o600 });
   }
 
   /**
@@ -84,7 +84,7 @@ export class WriteJournal {
     };
 
     const line = JSON.stringify(update);
-    appendFileSync(this.journalPath, `${line}\n`);
+    appendFileSync(this.journalPath, `${line}\n`, { mode: 0o600 });
   }
 
   /**

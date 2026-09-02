@@ -172,7 +172,13 @@ function mountRegister(app: Express, deps: RouteDeps): void {
       response_types: ["code"],
       scope: SCOPES_SUPPORTED.join(" "),
     };
-    if (clientSecret) response["client_secret"] = clientSecret;
+    // RFC 7591 §3.2.1: REQUIRED whenever client_secret is present. ClientStore
+    // never expires a secret (authenticateClient only compares the hash), so
+    // 0 ("does not expire") is the value that actually matches the behavior.
+    if (clientSecret) {
+      response["client_secret"] = clientSecret;
+      response["client_secret_expires_at"] = 0;
+    }
 
     res.status(201).json(response);
   });

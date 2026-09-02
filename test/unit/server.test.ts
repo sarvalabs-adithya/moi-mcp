@@ -16,23 +16,35 @@ import { applyEnv, restoreEnv, tempHome } from "../helpers/harness.js";
 import { ACCOUNT, startMockNode, type MockNode } from "../helpers/mock-node.js";
 
 const VALID_TOKEN = "test-token";
+const READ_ONLY_TOKEN = "read-only-token";
 const AUTH_INFO: AuthInfo = {
   userId: "user-1",
   clientId: "client-1",
   scopes: ["moi:read", "moi:write"],
   expiresAt: Math.floor(Date.now() / 1000) + 3600,
 };
+const READ_ONLY_AUTH_INFO: AuthInfo = {
+  userId: "user-2",
+  clientId: "client-2",
+  scopes: ["moi:read"],
+  expiresAt: Math.floor(Date.now() / 1000) + 3600,
+};
 
 function fakeAuthenticate(req: { headers: { authorization?: string | string[] | undefined } }): AuthInfo | undefined {
   const header = req.headers.authorization;
   const value = Array.isArray(header) ? header[0] : header;
-  return value === `Bearer ${VALID_TOKEN}` ? AUTH_INFO : undefined;
+  if (value === `Bearer ${VALID_TOKEN}`) return AUTH_INFO;
+  if (value === `Bearer ${READ_ONLY_TOKEN}`) return READ_ONLY_AUTH_INFO;
+  return undefined;
 }
 
-function fakeChallengeHeader(): string {
+function fakeChallengeHeader(opts?: { error?: string; scope?: string }): string {
+  const error = opts?.error ?? "invalid_token";
+  const description = error === "insufficient_scope" ? "This action requires additional scope" : "Authorization required";
+  const scopePart = opts?.scope ? `, scope="${opts.scope}"` : "";
   return (
-    'Bearer error="invalid_token", error_description="Authorization required", ' +
-    'resource_metadata="https://example.test/.well-known/oauth-protected-resource"'
+    `Bearer error="${error}", error_description="${description}", ` +
+    `resource_metadata="https://example.test/.well-known/oauth-protected-resource"${scopePart}`
   );
 }
 
@@ -174,6 +186,38 @@ describe("hosted transport", () => {
     const { status, json } = await rpc(baseUrl, toolCall(1, "moi_wallet_status"));
     expect(status).toBe(401);
     expect(json).toEqual({ error: "authorization required" });
+  });
+
+  it("403s a moi:read-only token calling moi_connect_wallet, with an insufficient_scope challenge", async () => {
+    const auth = { authorization: `Bearer ${READ_ONLY_TOKEN}` };
+    const { status, headers, json } = await rpc(baseUrl, toolCall(1, "moi_connect_wallet"), auth);
+    expect(status).toBe(403);
+    expect(headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+    expect(headers.get("www-authenticate")).toContain('scope="moi:write"');
+    expect(json).toEqual({ error: "insufficient_scope", error_description: "This action requires the 'moi:write' scope." });
+  });
+
+  it("403s a moi:read-only token calling moi_disconnect_wallet and moi_transfer", async () => {
+    const auth = { authorization: `Bearer ${READ_ONLY_TOKEN}` };
+    const disconnect = await rpc(baseUrl, toolCall(1, "moi_disconnect_wallet"), auth);
+    expect(disconnect.status).toBe(403);
+
+    const transfer = await rpc(baseUrl, toolCall(2, "moi_transfer", { to: ACCOUNT }), auth);
+    expect(transfer.status).toBe(403);
+  });
+
+  it("still lets a moi:read-only token call moi_wallet_status", async () => {
+    const auth = { authorization: `Bearer ${READ_ONLY_TOKEN}` };
+    const { status, json } = await rpc(baseUrl, toolCall(1, "moi_wallet_status"), auth);
+    expect(status).toBe(200);
+    expect(json.result.structuredContent).toEqual({ connected: false });
+  });
+
+  it("lets a full-scope token call moi_connect_wallet", async () => {
+    const auth = { authorization: `Bearer ${VALID_TOKEN}` };
+    const { status, json } = await rpc(baseUrl, toolCall(1, "moi_connect_wallet"), auth);
+    expect(status).toBe(200);
+    expect(json.result.isError).toBeFalsy();
   });
 
   it("GATED covers every wallet tool and every write tool in the schema's TOOLS manifest", () => {
