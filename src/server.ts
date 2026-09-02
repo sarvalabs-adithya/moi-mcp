@@ -40,9 +40,14 @@ import { messageOf, toMcpError } from "./errors.js";
 import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { NETWORKS } from "./moi/provider.js";
+import type { Network } from "./schema.js";
 import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing } from "./pairing/index.js";
+import { registerMandateTools } from "./tools/mandates.js";
+import { FileAgentKeyStore, type AgentKeyStore } from "./signing/agent-keys.js";
+import { MandateLedger } from "./mandates/ledger.js";
 import { WalletConnectClient } from "./wc/client.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
+import { WriteJournal } from "./journal.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -62,6 +67,8 @@ export const GATED = [
   "moi_connect_wallet",
   "moi_disconnect_wallet",
   "moi_wallet_status",
+  "moi_mandate_status",
+  "moi_grant_mandate",
 ] as const;
 
 /**
@@ -80,16 +87,25 @@ const REQUIRED_SCOPE: Record<(typeof GATED)[number], "moi:read" | "moi:write"> =
   moi_connect_wallet: "moi:write",
   moi_disconnect_wallet: "moi:write",
   moi_wallet_status: "moi:read",
+  moi_mandate_status: "moi:read",
+  moi_grant_mandate: "moi:write",
 };
 
 export interface HostedDeps {
   authenticate: AuthHandle["authenticate"];
   challengeHeader: AuthHandle["challengeHeader"];
   store: WalletSessionStore;
+  journal: WriteJournal;
+  /** Per-user server-held agent keys, backing delegated-spend mandates. */
+  agentKeys: AgentKeyStore;
+  /** Mandate cap/expiry ledger, derived from the journal. */
+  ledger: MandateLedger;
   /** Whether mountPairing(app, ...) was called on the outer app main() builds this onto. Surfaced at /health only — this app never serves /pair itself. */
   resolveUriMounted: boolean;
   /** One-arg wrapper over pairing/index.js's createPairingLink(userId, publicUrl) — the publicUrl is baked in by whoever builds this object. */
   createPairingLink(userId: string): { url: string; expiresAt: number };
+  /** Wrapper that provides MOI_NETWORK and optional MOI_RPC_URL for the provider. */
+  providerOptions(): { network: Network; rpcUrl?: string };
 }
 
 /** Collect a JSON body, refusing anything oversized. Mirrors src/http.ts. */
@@ -316,7 +332,20 @@ export function buildHostedApp(deps: HostedDeps): Application {
     // state — and so an authenticated request's wallet tools never leak into
     // an unauthenticated one's tool list.
     const server = buildReadOnlyServer();
-    if (auth) registerWalletSurface(server, deps, auth);
+    if (auth) {
+      registerWalletSurface(server, deps, auth);
+      registerMandateTools(
+        server,
+        {
+          store: deps.store,
+          journal: deps.journal,
+          agentKeys: deps.agentKeys,
+          ledger: deps.ledger,
+          providerOptions: deps.providerOptions,
+        },
+        auth,
+      );
+    }
 
     const transport = withModernSchemaDialect(
       new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }),
@@ -434,15 +463,24 @@ async function main(): Promise<void> {
   });
 
   const store = new FileWalletSessionStore(hosted.dataDir);
+  const journal = new WriteJournal(hosted.dataDir);
+  const agentKeys = new FileAgentKeyStore(hosted.dataDir);
+  const ledger = new MandateLedger(journal, hosted.dataDir);
   mountPairing(app, { resolveUri: makeResolveUri(cfg, hosted, store) });
+
+  const providerOptions = () => ({ network: cfg.MOI_NETWORK, rpcUrl: cfg.MOI_RPC_URL });
 
   app.use(
     buildHostedApp({
       authenticate,
       challengeHeader,
       store,
+      journal,
+      agentKeys,
+      ledger,
       resolveUriMounted: true,
       createPairingLink: (userId: string) => createPairingLinkFor(userId, hosted.PUBLIC_URL),
+      providerOptions,
     }),
   );
 

@@ -5,12 +5,18 @@
  */
 
 import { createServer, type Server } from "node:http";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuthInfo } from "../../src/auth/index.js";
 import { TOOLS } from "../../src/schema.js";
 import { buildHostedApp, GATED, type HostedDeps } from "../../src/server.js";
+import { WriteJournal } from "../../src/journal.js";
+import { FileAgentKeyStore } from "../../src/signing/agent-keys.js";
+import { MandateLedger } from "../../src/mandates/ledger.js";
 import type { StoredWalletSession, WalletSessionStore } from "../../src/wc/store.js";
 import { applyEnv, restoreEnv, tempHome } from "../helpers/harness.js";
 import { ACCOUNT, startMockNode, type MockNode } from "../helpers/mock-node.js";
@@ -68,15 +74,21 @@ class FakeStore implements WalletSessionStore {
 }
 
 function makeDeps(store: WalletSessionStore): HostedDeps {
+  const dataDir = mkdtempSync(join(tmpdir(), "moi-server-test-"));
+  const journal = new WriteJournal(dataDir);
   return {
     authenticate: fakeAuthenticate,
     challengeHeader: fakeChallengeHeader,
     store,
+    journal,
+    agentKeys: new FileAgentKeyStore(dataDir),
+    ledger: new MandateLedger(journal, dataDir),
     resolveUriMounted: true,
     createPairingLink: (userId) => ({
       url: `https://example.test/pair/${userId}`,
       expiresAt: Date.now() + 300_000,
     }),
+    providerOptions: () => ({ network: "custom", rpcUrl: process.env.MOI_RPC_URL }),
   };
 }
 
