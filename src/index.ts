@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * stdio entry point for @moi-protocol/mcp-server.
  *
@@ -77,6 +78,16 @@ function registerPing(server: McpServer): void {
 }
 
 async function main(): Promise<void> {
+  // Guard against misuse: if someone runs mcp-server with a CLI subcommand,
+  // print a hint and exit before starting the MCP server.
+  const arg = process.argv[2];
+  if (arg && !arg.startsWith("-")) {
+    process.stderr.write(
+      `This is the MCP stdio server. For wallet commands run: npx -y -p @moi-protocol/mcp-server moi-mcp ${arg}\n`,
+    );
+    process.exit(1);
+  }
+
   // Surface configuration problems on stderr at startup, but never refuse to
   // start: a server that dies before `initialize` shows up in Claude Desktop as
   // an unexplained failure. `ping` reports the same error to the agent.

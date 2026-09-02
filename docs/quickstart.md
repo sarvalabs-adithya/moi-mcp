@@ -46,7 +46,7 @@ A QR code appears in the chat. Open MOI Wallet on your phone, scan it, approve.
 
 > _[screenshot: QR in chat, MOI Wallet approval screen]_
 
-Prefer the terminal? `npx @moi-protocol/mcp-server pair` prints the same QR.
+Prefer the terminal? `npx -y -p @moi-protocol/mcp-server moi-mcp pair` prints the same QR.
 
 Confirm it landed:
 

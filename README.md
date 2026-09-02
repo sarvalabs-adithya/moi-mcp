@@ -75,7 +75,7 @@ live in [`examples/`](./examples): Claude Desktop, Cursor, and OpenClaw.
 Then pair once, either from the terminal or from inside a chat:
 
 ```bash
-npx @moi-protocol/mcp-server pair
+npx -y -p @moi-protocol/mcp-server moi-mcp pair
 ```
 
 ## Tools

@@ -9,6 +9,7 @@
     "node": ">=20"
   },
   "bin": {
+    "mcp-server": "dist/index.js",
     "moi-mcp": "dist/cli.js",
     "moi-mcp-http": "dist/http.js"
   },
