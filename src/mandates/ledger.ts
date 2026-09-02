@@ -40,6 +40,24 @@ export interface MandateRecord {
 export class MandateLedger {
   private journalPath: string;
 
+  /**
+   * Per-key serialization for reserve(). Each entry is the tail of an
+   * in-process queue of pending operations for that MandateKey; a new
+   * operation chains onto it so "check remaining, then append" runs as one
+   * unit relative to any other operation on the same key. Keyed by the same
+   * (userId, assetId, benefactor, beneficiary) tuple reserve() gates on.
+   * Process-local only — matches the single-process hosted server this runs in.
+   */
+  private readonly reserveQueues = new Map<string, Promise<unknown>>();
+
+  /**
+   * Monotonic counter mixed into grant entry ids alongside Date.now(). Two
+   * recordGrant() calls issued back-to-back (no meaningful clock tick
+   * between them, e.g. in a fast test or a tight retry) would otherwise
+   * still collide on a millisecond-resolution timestamp alone.
+   */
+  private grantSeq = 0;
+
   constructor(private readonly journal: WriteJournal, dataDir: string) {
     this.journalPath = join(dataDir, "journal.jsonl");
   }
@@ -52,13 +70,24 @@ export class MandateLedger {
     const allEntries = this.readAllJournalEntries();
     const mandateEntries = allEntries.filter((e) => this.matchesKey(e, key));
 
-    // Find the most recent mandate_grant
+    // Find the most recent mandate_grant whose journal entry has actually
+    // transitioned to "confirmed" — i.e., the owner's Approve interaction was
+    // signed and successfully broadcast. A "proposed" grant is just a built,
+    // simulated, journaled interaction the caller has not yet approved on
+    // their wallet; it authorizes nothing on-chain, so it must not be
+    // reported as found/active. This mirrors the state gate mandate_spend
+    // entries already get below. A newer grant attempt that never confirmed
+    // (e.g. still awaiting approval, or the broadcast failed) is skipped in
+    // favor of an older confirmed one, rather than blanking the mandate out.
     let mostRecentGrant: JournalEntry | undefined;
     for (let i = mandateEntries.length - 1; i >= 0; i--) {
       const e = mandateEntries[i];
       if (e && e.kind === "mandate_grant") {
-        mostRecentGrant = e;
-        break;
+        const latestState = this.getLatestEntryState(allEntries, e.id);
+        if (latestState && latestState.state === "confirmed") {
+          mostRecentGrant = e;
+          break;
+        }
       }
     }
 
@@ -121,9 +150,18 @@ export class MandateLedger {
   /**
    * Records a mandate grant (absolute-set semantics).
    * Replaces any prior cap/expiry for this key.
+   *
+   * Each call gets a unique journal entry id (a Date.now() suffix, same
+   * scheme reserve() uses for mandate_spend) rather than the bare
+   * deterministic key. Without that, two grant attempts for the same
+   * (userId, assetId, benefactor, beneficiary) — e.g. a replacement grant
+   * made while an earlier one is still awaiting wallet approval — would
+   * collide on id, so a later commit(journalEntryId) call (once the
+   * signAndBroadcast seam for grants is wired) could confirm the wrong
+   * attempt.
    */
   async recordGrant(key: MandateKey, cap: bigint, expiresAt: number): Promise<{ journalEntryId: string }> {
-    const id = this.makeEntryId("mandate_grant", key);
+    const id = this.makeEntryId("mandate_grant", key, `${Date.now()}-${this.grantSeq++}`);
     const detail = JSON.stringify({
       assetId: key.assetId,
       benefactor: key.benefactor,
@@ -169,8 +207,25 @@ export class MandateLedger {
    * Server-side gate: reserve spend against the mandate.
    * Throws MANDATE_NOT_FOUND / MANDATE_EXPIRED / MANDATE_EXCEEDED.
    * Synchronously appends a proposed mandate_spend journal entry — the reservation itself.
+   *
+   * The read-check-then-append below is not atomic on its own — get() reads
+   * and journal.append() writes are two separate async steps with a real
+   * yield point between them (get() resolves via a microtask before its
+   * result is checked). Two overlapping reserve() calls for the same key
+   * could otherwise both read the same pre-reservation `remaining`, both
+   * pass the cap check, and both append — jointly overspending the cap. This
+   * serializes reserve() per MandateKey via an in-process queue so the whole
+   * check-then-append body runs as one unit relative to other reserve()
+   * calls on the same key; calls for different keys still run concurrently.
    */
   async reserve(key: MandateKey, amount: bigint): Promise<{ journalEntryId: string; remainingAfter: bigint }> {
+    return this.withReserveLock(key, () => this.reserveLocked(key, amount));
+  }
+
+  private async reserveLocked(
+    key: MandateKey,
+    amount: bigint,
+  ): Promise<{ journalEntryId: string; remainingAfter: bigint }> {
     const record = await this.get(key);
 
     if (!record.found) {
@@ -268,6 +323,33 @@ export class MandateLedger {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Runs `fn` after every previously-queued operation for this MandateKey has
+   * settled, and only then — serializing reserve() per key without blocking
+   * reserve() calls for other keys.
+   *
+   * Implementation: `reserveQueues` holds the tail promise of each key's
+   * queue. Chaining a new operation on with `.then(fn, fn)` (not just
+   * `.then(fn)`) means a prior operation's rejection (e.g. MANDATE_EXCEEDED)
+   * does not wedge the queue for later callers. The tail stored back is that
+   * same run, swallowed with `.catch()`, so the queue map itself never holds
+   * a rejected promise.
+   */
+  private withReserveLock<T>(key: MandateKey, fn: () => Promise<T>): Promise<T> {
+    const lockKey = this.reserveLockKey(key);
+    const tail = this.reserveQueues.get(lockKey) ?? Promise.resolve();
+    const run = tail.then(fn, fn);
+    this.reserveQueues.set(
+      lockKey,
+      run.catch(() => undefined),
+    );
+    return run;
+  }
+
+  private reserveLockKey(key: MandateKey): string {
+    return `${key.userId}:${key.assetId}:${key.benefactor}:${key.beneficiary}`;
   }
 
   /**

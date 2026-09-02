@@ -27,6 +27,26 @@ const defaultKey: MandateKey = {
   beneficiary: "0xagent",
 };
 
+/**
+ * recordGrant() only journals a "proposed" grant — it never authorizes
+ * anything on-chain by itself. A mandate only becomes found/active once the
+ * owner's Approve interaction is signed and broadcast, which lands here as
+ * ledger.commit(journalEntryId). Most tests below only care about the
+ * post-confirmation state, so they go through this helper; the tests that
+ * specifically exercise the "not yet confirmed" gate call recordGrant()
+ * directly instead.
+ */
+async function grantAndConfirm(
+  ledger: MandateLedger,
+  key: MandateKey,
+  cap: bigint,
+  expiresAt: number,
+): Promise<{ journalEntryId: string }> {
+  const result = await ledger.recordGrant(key, cap, expiresAt);
+  await ledger.commit(result.journalEntryId);
+  return result;
+}
+
 describe("MandateLedger", () => {
   describe("get", () => {
     it("returns found:false for nonexistent mandate", async () => {
@@ -43,13 +63,13 @@ describe("MandateLedger", () => {
       expect(record.active).toBe(false);
     });
 
-    it("returns found:true after grant", async () => {
+    it("returns found:true after a grant is confirmed", async () => {
       const dir = tempDataDir();
       const journal = new WriteJournal(dir);
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
-      await ledger.recordGrant(defaultKey, 1000n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 1000n, expiresAt);
 
       const record = await ledger.get(defaultKey);
 
@@ -61,13 +81,50 @@ describe("MandateLedger", () => {
       expect(record.active).toBe(true);
     });
 
+    it("does not report an unconfirmed (still-proposed) grant as found or active", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      // The owner has not yet approved this on their wallet — no commit().
+      await ledger.recordGrant(defaultKey, 1000n, expiresAt);
+
+      const record = await ledger.get(defaultKey);
+
+      expect(record.found).toBe(false);
+      expect(record.active).toBe(false);
+      expect(record.cap).toBe(0n);
+      expect(record.remaining).toBe(0n);
+    });
+
+    it("skips a newer unconfirmed grant attempt and falls back to an older confirmed one", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt);
+
+      await new Promise((r) => setTimeout(r, 10));
+      // A replacement grant is proposed but never confirmed (broadcast failed,
+      // or approval is still pending on the phone).
+      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      const record = await ledger.get(defaultKey);
+
+      expect(record.found).toBe(true);
+      expect(record.cap).toBe(100n);
+      expect(record.active).toBe(true);
+    });
+
     it("marks mandate inactive after expiry", async () => {
       const dir = tempDataDir();
       const journal = new WriteJournal(dir);
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) - 1; // 1 second ago
-      await ledger.recordGrant(defaultKey, 1000n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 1000n, expiresAt);
 
       const record = await ledger.get(defaultKey);
 
@@ -81,7 +138,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 1000n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 1000n, expiresAt);
 
       // Manually add spends to the journal
       await ledger.reserve(defaultKey, 300n);
@@ -99,7 +156,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 1000n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 1000n, expiresAt);
       await ledger.recordRevoke(defaultKey);
 
       const record = await ledger.get(defaultKey);
@@ -115,7 +172,7 @@ describe("MandateLedger", () => {
 
       const bigAmount = BigInt("9999999999999999999"); // > 2^53
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, bigAmount, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, bigAmount, expiresAt);
 
       const record = await ledger.get(defaultKey);
 
@@ -130,7 +187,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt1 = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 100n, expiresAt1);
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt1);
 
       // Add spend (before replacement)
       await ledger.reserve(defaultKey, 50n);
@@ -138,7 +195,7 @@ describe("MandateLedger", () => {
       // Wait a tiny bit and replace grant
       await new Promise((r) => setTimeout(r, 10));
       const expiresAt2 = Math.floor(Date.now() / 1000) + 7200;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt2);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt2);
 
       const record = await ledger.get(defaultKey);
 
@@ -156,7 +213,7 @@ describe("MandateLedger", () => {
       // Manually create journal entries to simulate an overdrawn state
       // (This shouldn't happen in practice due to reserve() checks, but defensive)
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt);
 
       // Simulate an orphaned spend that shouldn't count
       const spendId = await ledger.reserve(defaultKey, 50n);
@@ -175,7 +232,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      const result = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      const result = await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       expect(result.journalEntryId).toMatch(/^mandate_grant:/);
 
@@ -190,12 +247,12 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt1 = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 100n, expiresAt1);
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt1);
 
       // Wait and grant again
       await new Promise((r) => setTimeout(r, 10));
       const expiresAt2 = Math.floor(Date.now() / 1000) + 7200;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt2);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt2);
 
       const record = await ledger.get(defaultKey);
 
@@ -222,6 +279,23 @@ describe("MandateLedger", () => {
       expect(detail.cap).toBe(bigAmount.toString());
       expect(typeof detail.cap).toBe("string");
     });
+
+    it("gives each grant attempt a unique journal entry id", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const first = await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      const second = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      // A collision here would mean a later commit()/release() of one
+      // attempt (once the grant-approval signAndBroadcast seam is wired)
+      // could silently confirm or release the wrong one.
+      expect(first.journalEntryId).not.toBe(second.journalEntryId);
+      expect(first.journalEntryId).toMatch(/^mandate_grant:/);
+      expect(second.journalEntryId).toMatch(/^mandate_grant:/);
+    });
   });
 
   describe("recordRevoke", () => {
@@ -231,7 +305,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const result = await ledger.recordRevoke(defaultKey);
       expect(result.journalEntryId).toMatch(/^mandate_revoke:/);
@@ -247,7 +321,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
       await ledger.reserve(defaultKey, 100n);
       await ledger.recordRevoke(defaultKey);
 
@@ -275,13 +349,32 @@ describe("MandateLedger", () => {
       }
     });
 
+    it("throws MANDATE_NOT_FOUND when the grant was journaled but never confirmed", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      // Never confirmed — the owner never actually approved this on-chain.
+      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      await expect(ledger.reserve(defaultKey, 100n)).rejects.toThrow(MoiError);
+      try {
+        await ledger.reserve(defaultKey, 100n);
+      } catch (err) {
+        if (err instanceof MoiError) {
+          expect(err.code).toBe(ErrorCode.MANDATE_NOT_FOUND);
+        }
+      }
+    });
+
     it("throws MANDATE_EXPIRED for expired mandate", async () => {
       const dir = tempDataDir();
       const journal = new WriteJournal(dir);
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) - 1;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       await expect(ledger.reserve(defaultKey, 100n)).rejects.toThrow(MoiError);
       try {
@@ -299,7 +392,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt);
 
       await expect(ledger.reserve(defaultKey, 150n)).rejects.toThrow(MoiError);
       try {
@@ -318,7 +411,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const result = await ledger.reserve(defaultKey, 100n);
 
@@ -332,7 +425,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 1000n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 1000n, expiresAt);
 
       const r1 = await ledger.reserve(defaultKey, 300n);
       expect(r1.remainingAfter).toBe(700n);
@@ -347,7 +440,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt);
 
       await ledger.reserve(defaultKey, 60n);
 
@@ -363,13 +456,59 @@ describe("MandateLedger", () => {
       }
     });
 
+    it("serializes concurrent reserve() calls so the cap cannot be oversold", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt);
+
+      // Two concurrent reserves that would jointly overspend the 100n cap
+      // (60 + 60 = 120) if both raced past the same pre-reservation read.
+      const results = await Promise.allSettled([
+        ledger.reserve(defaultKey, 60n),
+        ledger.reserve(defaultKey, 60n),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === "fulfilled");
+      const rejected = results.filter((r) => r.status === "rejected");
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+
+      const record = await ledger.get(defaultKey);
+      expect(record.spent).toBe(60n);
+      expect(record.remaining).toBe(40n);
+    });
+
+    it("does not serialize reserve() calls for different mandate keys", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const keyA = { ...defaultKey, beneficiary: "0xagentA" };
+      const keyB = { ...defaultKey, beneficiary: "0xagentB" };
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      await grantAndConfirm(ledger, keyA, 100n, expiresAt);
+      await grantAndConfirm(ledger, keyB, 100n, expiresAt);
+
+      const [resultA, resultB] = await Promise.all([
+        ledger.reserve(keyA, 60n),
+        ledger.reserve(keyB, 60n),
+      ]);
+
+      expect(resultA.remainingAfter).toBe(40n);
+      expect(resultB.remainingAfter).toBe(40n);
+    });
+
     it("does not append journal entry on error", async () => {
       const dir = tempDataDir();
       const journal = new WriteJournal(dir);
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 100n, expiresAt);
 
       const journalPath = join(dir, "journal.jsonl");
 
@@ -397,7 +536,7 @@ describe("MandateLedger", () => {
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
       const bigAmount = BigInt("12345678901234567890");
-      await ledger.recordGrant(defaultKey, bigAmount, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, bigAmount, expiresAt);
 
       await ledger.reserve(defaultKey, 500n);
 
@@ -419,7 +558,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const r = await ledger.reserve(defaultKey, 100n);
       await ledger.commit(r.journalEntryId);
@@ -438,7 +577,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const r = await ledger.reserve(defaultKey, 100n);
 
@@ -452,6 +591,26 @@ describe("MandateLedger", () => {
       expect(afterCommit.spent).toBe(100n);
       expect(afterCommit.remaining).toBe(400n);
     });
+
+    it("makes a mandate_grant entry found/active once confirmed", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      const beforeCommit = await ledger.get(defaultKey);
+      expect(beforeCommit.found).toBe(false);
+      expect(beforeCommit.active).toBe(false);
+
+      await ledger.commit(grant.journalEntryId);
+
+      const afterCommit = await ledger.get(defaultKey);
+      expect(afterCommit.found).toBe(true);
+      expect(afterCommit.active).toBe(true);
+      expect(afterCommit.cap).toBe(500n);
+    });
   });
 
   describe("release", () => {
@@ -461,7 +620,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const r = await ledger.reserve(defaultKey, 100n);
       await ledger.release(r.journalEntryId);
@@ -479,7 +638,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const r = await ledger.reserve(defaultKey, 100n);
 
@@ -500,7 +659,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
 
       const r1 = await ledger.reserve(defaultKey, 100n);
       await ledger.release(r1.journalEntryId);
@@ -508,6 +667,20 @@ describe("MandateLedger", () => {
       // Should now be able to reserve the 100n again
       const r2 = await ledger.reserve(defaultKey, 100n);
       expect(r2.remainingAfter).toBe(400n);
+    });
+
+    it("a grant that failed to broadcast (released) stays inactive", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await ledger.release(grant.journalEntryId);
+
+      const record = await ledger.get(defaultKey);
+      expect(record.found).toBe(false);
+      expect(record.active).toBe(false);
     });
   });
 
@@ -518,8 +691,8 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
-      const r = await ledger.reserve(defaultKey, 100n);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
+      await ledger.reserve(defaultKey, 100n);
 
       // Simulate crash: entry is still proposed
       // On replay, it should still count as spent
@@ -535,7 +708,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
       const r = await ledger.reserve(defaultKey, 100n);
       await ledger.commit(r.journalEntryId);
 
@@ -553,7 +726,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 500n, expiresAt);
       const r = await ledger.reserve(defaultKey, 100n);
       await ledger.release(r.journalEntryId);
 
@@ -573,7 +746,7 @@ describe("MandateLedger", () => {
       const ledger = new MandateLedger(journal, dir);
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, 0n, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, 0n, expiresAt);
 
       const record = await ledger.get(defaultKey);
       expect(record.cap).toBe(0n);
@@ -590,7 +763,7 @@ describe("MandateLedger", () => {
 
       const maxAmount = BigInt("9".repeat(78)); // Very large bigint
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(defaultKey, maxAmount, expiresAt);
+      await grantAndConfirm(ledger, defaultKey, maxAmount, expiresAt);
 
       const record = await ledger.get(defaultKey);
       expect(record.cap).toBe(maxAmount);
@@ -606,8 +779,8 @@ describe("MandateLedger", () => {
       const key2 = { ...defaultKey, beneficiary: "0xagent2" };
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(key1, 100n, expiresAt);
-      await ledger.recordGrant(key2, 200n, expiresAt);
+      await grantAndConfirm(ledger, key1, 100n, expiresAt);
+      await grantAndConfirm(ledger, key2, 200n, expiresAt);
 
       const r1 = await ledger.get(key1);
       const r2 = await ledger.get(key2);
@@ -625,8 +798,8 @@ describe("MandateLedger", () => {
       const key2 = { ...defaultKey, userId: "user2" };
 
       const expiresAt = Math.floor(Date.now() / 1000) + 3600;
-      await ledger.recordGrant(key1, 100n, expiresAt);
-      await ledger.recordGrant(key2, 200n, expiresAt);
+      await grantAndConfirm(ledger, key1, 100n, expiresAt);
+      await grantAndConfirm(ledger, key2, 200n, expiresAt);
 
       const r1 = await ledger.get(key1);
       const r2 = await ledger.get(key2);
