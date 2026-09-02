@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertSendable,
   buildCreateAsset,
+  buildMint,
   chooseStorageFund,
   DEFAULT_STORAGE_FUND,
   FUEL_RESERVE,
@@ -110,6 +111,56 @@ describe("buildCreateAsset", () => {
         symbol: "X", supply: 1n, dimension: 0, standard: "MAS9", isStateful: false, isFungible: true,
       }),
     ).toThrow(/MAS0, MAS1, MAS2, MASX/);
+  });
+});
+
+describe("buildMint", () => {
+  // MAS0AssetLogic.mint() never touches the signer to build calldata — it
+  // only stamps it onto the returned InteractionContext — so a plain object
+  // stands in for the real WalletConnect-backed signer used in production.
+  const signer = {};
+
+  it("delegates calldata to the SDK's MAS0AssetLogic.mint()", async () => {
+    const ix = await buildMint(signer, SENDER, { assetId: asset.toHex(), to: recipient.toHex(), amount: 500n });
+
+    expect(ix.sender).toEqual({ id: sender.toHex(), sequence: 3, key_id: 0 });
+    expect(ix.ix_operations).toHaveLength(1);
+    expect(ix.ix_operations[0]!.type).toBe(OpType.ASSET_INVOKE);
+    expect(ix.ix_operations[0]!.payload["callsite"]).toBe("Mint");
+    expect(ix.ix_operations[0]!.payload["asset_id"]).toBe(asset.toHex());
+    // Emitted with no 0x prefix, matching every other builder's calldata.
+    expect(String(ix.ix_operations[0]!.payload["calldata"])).toMatch(/^[0-9a-f]+$/);
+  });
+
+  it("declares the asset AND the beneficiary as MUTATE_LOCK participants", () => {
+    return buildMint(signer, SENDER, { assetId: asset.toHex(), to: recipient.toHex(), amount: 1n }).then((ix) => {
+      expect(ix.participants).toEqual([
+        { id: asset.toHex(), lock_type: LockType.MUTATE_LOCK },
+        { id: recipient.toHex(), lock_type: LockType.MUTATE_LOCK },
+      ]);
+    });
+  });
+
+  it("mints to the exact recipient and amount given, not the sender", async () => {
+    const ix = await buildMint(signer, SENDER, { assetId: asset.toHex(), to: recipient.toHex(), amount: 42n });
+    const participants = ix.participants ?? [];
+    expect(participants.some((p) => p.id === recipient.toHex())).toBe(true);
+    expect(participants.some((p) => p.id === sender.toHex())).toBe(false);
+  });
+
+  it("carries no funds block — the amount lives in the calldata", () => {
+    return buildMint(signer, SENDER, { assetId: asset.toHex(), to: recipient.toHex(), amount: 1n }).then((ix) => {
+      expect(ix.funds).toBeUndefined();
+    });
+  });
+
+  it("wraps a build failure (e.g. a malformed beneficiary) as MoiError", async () => {
+    await expect(
+      buildMint(signer, SENDER, { assetId: asset.toHex(), to: "not-a-hex-address", amount: 1n }),
+    ).rejects.toThrow(MoiError);
+    await expect(
+      buildMint(signer, SENDER, { assetId: asset.toHex(), to: "not-a-hex-address", amount: 1n }),
+    ).rejects.toThrow(/Could not build a mint/);
   });
 });
 
