@@ -21,5 +21,29 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # The bin entry must resolve, or `npx @moi-protocol/mcp-server` is broken.
+      # The bin entries must resolve, or `npx @moi-protocol/mcp-server` is broken.
       - run: node dist/cli.js help
+
+      # Install from the packed tarball and start moi-mcp-http through its npm
+      # bin SYMLINK with nothing configured. Running dist/http.js directly does
+      # not exercise the main-module guard, which is how a silently-exiting bin
+      # shipped once already.
+      - name: HTTP bin starts through the npm symlink
+        run: |
+          npm pack --silent
+          TGZ="$PWD/$(ls moi-protocol-mcp-server-*.tgz)"
+          DIR="$(mktemp -d)"
+          cd "$DIR" && npm init -y >/dev/null && npm install --silent "$TGZ"
+          PORT=8799 ./node_modules/.bin/moi-mcp-http &
+          for i in $(seq 1 20); do
+            sleep 0.5
+            if curl -fsS "http://localhost:8799/health" -o health.json; then break; fi
+          done
+          cat health.json
+          grep -q '"ok":true' health.json
+          curl -fsS -X POST http://localhost:8799/mcp \
+            -H 'content-type: application/json' \
+            -H 'accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
+            | grep -q moi_get_account
+          kill %1

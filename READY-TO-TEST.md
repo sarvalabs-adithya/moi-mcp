@@ -75,8 +75,7 @@ stderr is the reason.
 | 8 | `create an asset called MCPTEST2 with supply 1000` (no storageFund) | nothing arrives | Tool error: "The node says this interaction would fail … Pass a smaller `storageFund`". Already verified; a regression if the phone buzzes |
 
 Between 2 and 3 the sequence number advances; if 3 says "broadcasting it
-failed", run it once more. Known: `moi_get_logic` returns `routines: []` for
-every logic (`src/moi/reads.ts:240` bug) — do not treat as new.
+failed", run it once more.
 
 ## 6. Go service
 
@@ -90,9 +89,9 @@ curl -s -X POST localhost:8798/mcp -H 'Content-Type: application/json' -H 'Accep
 kill %1
 ```
 
-(The TS HTTP server: `PORT=8787 node dist/http.js` — run the file directly, the
-`moi-mcp-http` bin symlink exits silently in 0.1.0, and `/health` returns 503
-without `WC_PROJECT_ID`. Both are known bugs, not regressions.)
+(The TS HTTP server: `PORT=8787 node dist/http.js`, or the `moi-mcp-http` bin.
+It needs no `WC_PROJECT_ID` — `/health` should return `{"ok":true,…}` with
+nothing configured.)
 
 ## 7. If something fails, send me
 

@@ -36,30 +36,25 @@ No automation can tap Approve. Unverified through the tools with a real tap:
 session in `~/.moi-mcp/session.json` expires **2026-09-02 05:03 UTC**; re-pair
 first if `npm run status` says not connected.
 
-## Bugs found today, not yet fixed (src/ was out of scope for the doc pass)
+## Bugs found and fixed (commit 10f2ce1)
 
-1. **`moi_get_logic` returns `routines: []` for every logic.**
-   `src/moi/reads.ts:240` filters manifest elements on `kind === "routine"`;
-   the manifest (and `js-moi-utils` `ElementType.ROUTINE`) uses `"callable"`.
-   The registry logic has 14 callables (deploy/invoke/internal), 11 via
-   `getLogicDriver`. Fix: accept `"callable"`, and map `internal` out of the
-   `invoke|deploy|enlist|view` enum. `test/unit/tools-reads.test.ts` has an
-   `it.fails` for this — flip it to `it` once fixed.
-2. **`moi-mcp-http` bin never starts via the npm symlink** (`src/http.ts:162`).
-   The main-module guard compares `basename(process.argv[1])` — the symlink
-   `moi-mcp-http` — with `import.meta.url` ending `http.js`. Exit 0, no
-   output, nothing listening. `node dist/http.js` works. Fix: `realpathSync`
-   argv[1] and compare `pathToFileURL(...).href`, or move `main()` to a thin
-   bin file like `cli.ts`. Blocks publishing the HTTP bin.
-3. **`GET /health` returns 503 without `WC_PROJECT_ID`** (`src/http.ts:107`).
-   `getConfig()` requires it; the read-only server does not. Compute health
-   from network config only.
-4. **The MOI string error code never reaches the client.** `src/errors.ts`
-   puts `INSUFFICIENT_BALANCE` etc. in `McpError.data.code`, but SDK 1.30's
-   `tools/call` wrapper collapses thrown errors to `{isError, text: message}`.
-   Agents see `MCP error -32600: Account … holds 95699 … needs 999999999.`
-   Put the code in the message, or return `{status:"error", code, message}`
-   (already in `schema.WriteResult`, never produced).
+Five streams of automated checking found these; all are fixed and verified
+against live devnet.
+
+1. **`moi_get_logic` returned `routines: []` for every logic.** The manifest
+   names routines `"callable"` (`js-moi-utils` `ElementType.ROUTINE`), not
+   `"routine"`. Now returns the registry logic's 14 callables with kinds.
+2. **`moi-mcp-http` never started via the npm bin symlink.** npm installs bins
+   as symlinks, so a basename main-module guard never matched: exit 0, no
+   output, nothing listening — i.e. broken exactly as `npx` would run it. Now
+   compares realpaths.
+3. **`GET /health` returned 503 without `WC_PROJECT_ID`.** The read-only
+   server does not need one; it now satisfies the shared config schema itself.
+4. **The MOI string error code never reached the client.** SDK 1.30's
+   `tools/call` wrapper collapses a thrown `McpError` to
+   `{isError, text: message}` and drops `data`. The code is now a `[CODE]`
+   token in the message: `[INSUFFICIENT_BALANCE] Account … holds 95699 …`.
+   Agents branch on that token, not on `data.code`.
 5. Minor: `moi_call_logic` calls `wc.currentSession()` before the `view`
    branch (`src/tools/writes.ts:307`), so an unpaired view initialises the real
    SignClient for nothing. `src/wc/client.ts:246,319` write debug lines with

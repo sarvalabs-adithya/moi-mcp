@@ -18,13 +18,11 @@ approved through the tool is not defensible; the sign-then-broadcast mechanism
 is proven by script and on chain, the tool round-trip is not. `READY-TO-TEST.md`
 §5 is the script.
 
-**2a. Fix the two HTTP bugs the tarball test found.** `moi-mcp-http` exits
-silently when run through the npm bin symlink (`src/http.ts:162` main-module
-guard), and `GET /health` returns 503 without `WC_PROJECT_ID`
-(`src/http.ts:107`). Shipping `bin.moi-mcp-http` in that state means
-`npx -p @moi-protocol/mcp-server moi-mcp-http` does nothing. Also fix
-`moi_get_logic` returning no routines (`src/moi/reads.ts:240`) — it is in the
-tool table.
+**2a. ~~Fix the HTTP and `moi_get_logic` bugs~~ — done (commit 10f2ce1).**
+The tarball test caught `moi-mcp-http` exiting silently through the npm bin
+symlink and `/health` returning 503 without `WC_PROJECT_ID`; both are fixed and
+re-verified through a symlink with nothing configured. `moi_get_logic` now
+lists routines.
 
 **3. Create the GitHub repo.** `sarvalabs/moi-mcp`. The CLI already points at
 its issue tracker, and every directory submission needs a repo URL.
@@ -46,7 +44,7 @@ npm pack
 cd $(mktemp -d) && npm init -y && npm install <path>/moi-protocol-mcp-server-0.1.0.tgz
 ./node_modules/.bin/moi-mcp help          # bin must resolve or npx is broken
 PORT=8799 ./node_modules/.bin/moi-mcp-http & sleep 2 && curl -s localhost:8799/health; kill %1
-                                          # must print {"ok":true,...}; in 0.1.0 as packed it exits silently
+                                          # must print {"ok":true,...} with WC_PROJECT_ID unset
 
 # 2. Tag — CI publishes on v*
 git tag v0.1.0 && git push origin v0.1.0

@@ -51,11 +51,9 @@ PORT=8787 npx -p @moi-protocol/mcp-server moi-mcp-http   # from npm (see known i
 curl localhost:8787/health
 ```
 
-**Known issues in 0.1.0 (HTTP only):** the `moi-mcp-http` bin exits silently
-when started through the npm bin symlink, because the main-module guard in
-`src/http.ts:162` compares the symlink name to the real file name — run
-`node dist/http.js` directly until that is fixed. And `GET /health` returns 503
-when `WC_PROJECT_ID` is unset, even though the read tools work without it.
+The HTTP server needs no `WC_PROJECT_ID` — it registers no wallet tools and
+satisfies the shared config schema itself, so `/health` and every read work
+with nothing configured.
 
 ## Install
 
@@ -107,11 +105,9 @@ to the asset id it will get. `storageFund` (base units) defaults to 1,000,000;
 if your account holds less than that the simulation refuses locally and tells
 you to pass a smaller value. `50000` is plenty on devnet.
 
-**Known issue in 0.1.0:** `moi_get_logic` returns `routines: []` for every
-logic, because `src/moi/reads.ts:240` filters manifest elements on
-`kind === "routine"` while the manifest names them `"callable"`. Until fixed,
-`moi_call_logic` with an unknown routine name still lists the real ones in its
-error message.
+`moi_get_logic` lists a logic's callable routines with their kinds — the
+registry logic reports 14. `moi_call_logic` with an unknown routine name also
+lists the real ones in its error message.
 
 ## Security model
 

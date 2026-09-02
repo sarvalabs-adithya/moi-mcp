@@ -107,7 +107,8 @@ Tasks
 * `npm init`, TS strict, ESM, `tsup` build to `dist/`, `bin: { "moi-mcp": "dist/cli.js" }`.
 * `src/config.ts`: parse env with `schema.Config`, expand `~`, create `MOI_MCP_HOME`.
 * `src/index.ts`: `McpServer` + `StdioServerTransport`; register a `ping` tool.
-* `src/errors.ts`: `fail(code, message)` → `McpError` with `data.code`.
+* `src/errors.ts`: `fail(code, message)` → `McpError` carrying the code both
+  in `data.code` and as a `[CODE]` token in the message (the SDK drops `data`).
 * Vitest configured; one passing test for config.
 
 Accept
@@ -260,9 +261,7 @@ in `js-moi-agent-registry` `lib.cjs/client.js`, overridable with
 `MOI_AGENT_REGISTRY_LOGIC_ID`. We reuse that exact variable name. The logic
 loads on devnet (manifest fetches; 14 callable elements, 11 routines via
 `getLogicDriver`) but has no state object yet, so reads answer "not found".
-Note `moi_get_logic` currently reports zero routines for it — our bug
-(`src/moi/reads.ts:240` looks for kind `"routine"`, the manifest says
-`"callable"`), not the registry's.
+`moi_get_logic` lists its 14 callables.
 
 **5. npm scope — STILL YOURS.** Both `@moi-protocol/mcp-server` and
 `@sarvalabs/mcp-server` are unclaimed. Currently set to `@moi-protocol`.

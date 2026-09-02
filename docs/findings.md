@@ -149,9 +149,12 @@ handles to a wallet.
 
 **Honest cost.** An agent using this server cannot spend unattended — every
 write waits for a human tap and times out after five minutes. For a fleet of
-agents paying each other, that is a real limitation. The answer is session keys
-with spend caps, which MOI does not yet expose. Until then, a hot key on the
-server is not a solution to it.
+agents paying each other, that is a real limitation.
+
+The fix is not a hot key on the server. MOI already has the primitive: MAS0
+**mandates** (`Approve{beneficiary, amount, expires_at}` → the agent signs
+`TransferFrom` with its own key → `Revoke`), amount- and expiry-bounded and
+live on devnet today. Exposing them would need three new tools; see §6.
 
 ---
 

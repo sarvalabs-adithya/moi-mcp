@@ -55,8 +55,9 @@ JSON-RPC fake node (`mock-node.ts`) and a fake WalletConnect `SignClient`
   registration from state existence; bad id → tool error with a single node
   call; zod-invalid input → no node call; dimension-18 supply at 2^70;
   interaction success/failed/pending and `ASSET_INVOKE` naming.
-  One `it.fails`: `moi_get_logic` lists routines — flip to `it` when
-  `src/moi/reads.ts:240` accepts kind `"callable"`.
+  `moi_get_logic` lists the manifest's callable routines (the wire calls them
+  `"callable"`, not `"routine"` — filtering on the latter returned zero for
+  every real logic).
 - **Wallet** — status unpaired/paired/placeholder id/odd id/network mismatch;
   connect already-connected (no `connect()` call), awaiting-scan URI, QR PNG
   block; disconnect passes topic + reason, deletes `session.json`, is
@@ -144,9 +145,12 @@ ourselves. If that ever starts working, revisit — it is the documented path.
 
 `.github/workflows/ci.yml`, Node 20/22/24: typecheck, unit tests, build, and
 `node dist/cli.js help` — the last because a dangling `bin` breaks `npx`
-silently. Tier 2 and 3 stay out of CI deliberately. CI does **not** yet start
-`moi-mcp-http` through its bin symlink, which is how the `src/http.ts:162`
-guard bug slipped through; add that.
+silently. Tier 2 and 3 stay out of CI deliberately.
+
+CI also packs the tarball and starts `moi-mcp-http` through its npm bin
+**symlink** with nothing configured, asserting `/health` is `ok:true` and
+`tools/list` answers. Running `dist/http.js` directly does not exercise the
+main-module guard — which is how a silently-exiting bin shipped once.
 
 ## Before any release
 

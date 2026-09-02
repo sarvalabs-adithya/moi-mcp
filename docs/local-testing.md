@@ -22,9 +22,8 @@ is scoped to a **read-only HTTP transport**, which has none of these problems.
 wallet included. `moi-mcp-http` is the read-only service — 6 tools, no wallet,
 no `WC_PROJECT_ID`, stateless, hostable. This page covers the stdio one; for
 the HTTP one, `PORT=8787 node dist/http.js` and point a client at
-`http://localhost:8787/mcp`. Run the file directly: in 0.1.0 the
-`moi-mcp-http` bin symlink exits silently (`src/http.ts:162`), and `/health`
-answers 503 unless `WC_PROJECT_ID` is set even though the tools do not need it.
+`http://localhost:8787/mcp`. It needs no `WC_PROJECT_ID` — it registers no
+wallet tools, so `/health` and every read work with nothing configured.
 
 ## Build it
 
