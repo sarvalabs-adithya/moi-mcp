@@ -156,6 +156,42 @@ export function buildTransfer(
 export const DEFAULT_STORAGE_FUND = 1_000_000n;
 
 /**
+ * Least KMOI that actually covers a new MAS0 asset's storage.
+ *
+ * Measured against voyage devnet by binary search: 6,093 is the exact floor,
+ * and it does not move with symbol length (1 vs 12 chars) or dimension (0 vs
+ * 18). Rounded up for margin against pricing changes.
+ */
+export const MIN_STORAGE_FUND = 10_000n;
+
+/** KMOI held back so the interaction can still pay its own fuel. */
+export const FUEL_RESERVE = 25_000n;
+
+/**
+ * Choose a storage fund the caller can actually afford.
+ *
+ * Nobody creating a token should have to reason about storage funding, but
+ * the SDK's 1,000,000 default silently exceeds most devnet balances and the
+ * resulting failure is opaque (the ASSET_CREATE operation reports success
+ * while the interaction reports status 1). So: prefer the SDK default, fall
+ * back to whatever the balance allows, and refuse clearly only when even the
+ * floor is out of reach.
+ */
+export function chooseStorageFund(balance: bigint): bigint {
+  const affordable = balance > FUEL_RESERVE ? balance - FUEL_RESERVE : 0n;
+  if (affordable < MIN_STORAGE_FUND) {
+    throw new MoiError(
+      ErrorCode.INSUFFICIENT_BALANCE,
+      `Creating an asset needs at least ${MIN_STORAGE_FUND} KMOI to fund its storage ` +
+        `(plus ~${FUEL_RESERVE} held back for fuel), but this account holds ${balance}. ` +
+        `Fund the account, or pass a smaller storageFund explicitly if you know better.`,
+      { balance: balance.toString(), minimum: MIN_STORAGE_FUND.toString() },
+    );
+  }
+  return affordable < DEFAULT_STORAGE_FUND ? affordable : DEFAULT_STORAGE_FUND;
+}
+
+/**
  * Build an asset creation.
  *
  * A bare ASSET_CREATE operation does NOT work: MOI makes a new asset self-pay

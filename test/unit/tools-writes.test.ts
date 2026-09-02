@@ -473,3 +473,35 @@ describe("amount inputs accept the JSON numbers clients actually send", () => {
     expect(res.text).toMatch(/safe integer|string|Invalid/i);
   });
 });
+
+describe("storageFund is optional in practice, not just in the schema", () => {
+  it("moi_create_asset works with no storageFund at all", async () => {
+    seedSession(h.home);
+    const res = await h.call("moi_create_asset", { symbol: "AUTO", supply: 1000 });
+    expect(res.isError ?? false, res.text).toBe(false);
+    expect(res.structuredContent).toMatchObject({ status: "sent" });
+
+    // It still bundles the funding transfer — sizing it does not skip it.
+    const ops = signedIx(0)["ix_operations"] as Array<{ type: number }>;
+    expect(ops.map((o) => o.type)).toEqual([4, 5]);
+  });
+
+  it("an explicit storageFund still wins over the automatic one", async () => {
+    seedSession(h.home);
+    await h.call("moi_create_asset", { symbol: "AUTO", supply: 1000 });
+    const auto = signedIx(0)["ix_operations"] as Array<{ payload: Record<string, unknown> }>;
+
+    await h.call("moi_create_asset", { symbol: "AUTO", supply: 1000, storageFund: 12345 });
+    const explicit = signedIx(1)["ix_operations"] as Array<{ payload: Record<string, unknown> }>;
+
+    expect(explicit[1]!.payload["calldata"]).not.toBe(auto[1]!.payload["calldata"]);
+  });
+
+  it("refuses with an actionable message when the balance cannot cover storage", async () => {
+    seedSession(h.home);
+    node.state.kmoiBalance = 20_000n; // below MIN + reserve
+    const res = await h.call("moi_create_asset", { symbol: "POOR", supply: 1000 });
+    expect(res.text).toMatch(/at least 10000 KMOI|INSUFFICIENT_BALANCE/);
+    expect(wallet.request).not.toHaveBeenCalled();
+  });
+});

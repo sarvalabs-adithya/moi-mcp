@@ -12,7 +12,10 @@ import { describe, expect, it } from "vitest";
 import {
   assertSendable,
   buildCreateAsset,
+  chooseStorageFund,
   DEFAULT_STORAGE_FUND,
+  FUEL_RESERVE,
+  MIN_STORAGE_FUND,
   estimateFuelFor,
   buildLogicInvoke,
   buildTransfer,
@@ -313,5 +316,44 @@ describe("asset creation funds the new asset", () => {
 
   it("stays within the three-operation cap", () => {
     expect(() => assertSendable(make())).not.toThrow();
+  });
+});
+
+describe("chooseStorageFund", () => {
+  /**
+   * A new MOI asset pays for its own storage at creation, and a fresh asset
+   * account holds no KMOI — so the create must bundle a funding transfer. The
+   * SDK's 1,000,000 default silently exceeds most devnet balances, and the
+   * failure is opaque: the ASSET_CREATE operation reports success while the
+   * interaction reports status 1. Nobody creating a token should have to
+   * reason about any of that, so the tool sizes it.
+   *
+   * The floor was measured by binary search against voyage devnet: 6,093
+   * exactly, unchanged by symbol length (1 vs 12 chars) or dimension (0 vs 18).
+   * MIN_STORAGE_FUND carries margin over it.
+   */
+  it("prefers the SDK default when the balance can cover it", () => {
+    expect(chooseStorageFund(5_000_000n)).toBe(DEFAULT_STORAGE_FUND);
+  });
+
+  it("falls back to what the balance allows, holding fuel back", () => {
+    expect(chooseStorageFund(95_699n)).toBe(95_699n - FUEL_RESERVE);
+  });
+
+  it("stays above the measured 6,093 floor at the smallest balance it accepts", () => {
+    const smallest = MIN_STORAGE_FUND + FUEL_RESERVE;
+    expect(chooseStorageFund(smallest)).toBeGreaterThanOrEqual(MIN_STORAGE_FUND);
+    expect(chooseStorageFund(smallest)).toBeGreaterThan(6_093n);
+  });
+
+  it("refuses clearly rather than building an interaction that fails opaquely", () => {
+    expect(() => chooseStorageFund(20_000n)).toThrow(/at least 10000 KMOI/);
+    expect(() => chooseStorageFund(0n)).toThrow(MoiError);
+  });
+
+  it("never returns something below the floor", () => {
+    for (const balance of [35_001n, 40_000n, 100_000n, 999_999n, 10_000_000n]) {
+      expect(chooseStorageFund(balance)).toBeGreaterThanOrEqual(MIN_STORAGE_FUND);
+    }
   });
 });

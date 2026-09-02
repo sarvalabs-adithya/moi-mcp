@@ -121,7 +121,7 @@ No automation reaches this. It is also where every serious bug lived.
 |---|---|---|
 | 1 | `npm run pair` → scan | `session.json` written, `npm run status` shows connected |
 | 2 | `moi_transfer` 1 KMOI to self → **Approve** | `{"status":"sent"}` + hash; `moi_get_interaction` says success |
-| 3 | `moi_create_asset` `storageFund: 50000` → **Approve** | `{"status":"sent"}`; the new asset resolves via `moi_get_asset` |
+| 3 | `moi_create_asset` (no storageFund — it is sized automatically) → **Approve** | `{"status":"sent"}`; the new asset resolves via `moi_get_asset` |
 | 4 | `moi_transfer` → **Reject** | `{"status":"rejected","reason":"user_rejected"}` |
 | 5 | `moi_transfer` → ignore 5 min | `{"status":"rejected","reason":"timeout"}` |
 | 6 | Switch wallet network, then write | `network_mismatch`; reads still work |

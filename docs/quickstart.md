@@ -64,7 +64,7 @@ it and hands you the hash. Reject it and you get back
 you get `"timeout"`.
 
 Creating a token works the same way — `create an asset called MCPTEST with
-supply 1000 and storageFund 50000`. A new asset must hold some KMOI to pay for
+supply 1000`. A new asset must hold some KMOI to pay for
 its own storage; the default is 1,000,000, so pass a smaller `storageFund` on a
 small devnet balance.
 

@@ -20,6 +20,7 @@ import {
   buildLogicInvoke,
   buildTransfer,
   encodeLogicCall,
+  chooseStorageFund,
   estimateFuelFor,
   parseAmount,
   simulate,
@@ -77,6 +78,16 @@ async function withMeasuredFuel(ix: UnsignedInteraction): Promise<UnsignedIntera
   const { fuelLimit, estimated, reason } = await estimateFuelFor(provider, ix);
   if (!estimated) log("info", `fuel estimation unavailable (${reason}); using fallback ${fuelLimit}`);
   return { ...ix, fuel_limit: fuelLimit };
+}
+
+/** KMOI the account holds, in base units. */
+async function kmoiBalance(account: string): Promise<bigint> {
+  const { KMOI_ASSET_ID } = await import("js-moi-sdk");
+  const state = await getAccount(getProvider(providerOptions()), account);
+  const held = state.balances.find(
+    (b) => b.assetId.toLowerCase() === String(KMOI_ASSET_ID).toLowerCase(),
+  );
+  return toBigInt(held?.amount ?? 0);
 }
 
 function providerOptions() {
@@ -277,7 +288,11 @@ export function registerWriteTools(server: McpServer): void {
             standard,
             isStateful,
             isFungible,
-            ...(storageFund ? { storageFund: parseAmount(storageFund, 0) } : {}),
+            // Omitted -> size it from the balance. The SDK's 1,000,000 default
+            // exceeds most devnet accounts and fails opaquely.
+            storageFund: storageFund
+              ? parseAmount(storageFund, 0)
+              : chooseStorageFund(await kmoiBalance(session.account)),
           }),
         );
         assertSendable(ix);

@@ -101,9 +101,10 @@ Two resources are exposed too: `moi://networks` and `moi://docs/quickstart`.
 
 **`moi_create_asset` and `storageFund`.** A new MOI asset must hold KMOI to pay
 for its own storage, so the tool bundles an `ASSET_CREATE` with a KMOI transfer
-to the asset id it will get. `storageFund` (base units) defaults to 1,000,000;
-if your account holds less than that the simulation refuses locally and tells
-you to pass a smaller value. `50000` is plenty on devnet.
+to the asset id it will get. `storageFund` is optional: omitted, the server sizes it from your balance
+(the SDK's 1,000,000 default silently exceeds most devnet accounts). Pass it
+only to override. Below ~6,100 KMOI an asset cannot pay for its storage at
+all, so a balance too small to cover that is refused up front.
 
 `moi_get_logic` lists a logic's callable routines with their kinds — the
 registry logic reports 14. `moi_call_logic` with an unknown routine name also
