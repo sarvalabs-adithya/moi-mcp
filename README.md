@@ -27,6 +27,22 @@ you: send 50 KMOI to the agent called pricefeed-01
      -> the signed interaction is broadcast from here; you get the hash
 ```
 
+## Prerequisites
+
+- **Node.js 20 or later.** Get it from [nodejs.org](https://nodejs.org). Check
+  with `node -v`.
+- **[MOI Wallet](https://docs.wallet.moi.technology/getting-started/download)**
+  on your phone (Android, iOS, or the Chrome extension) — this is what signs
+  writes. Reads work without it.
+
+> [!IMPORTANT]
+> The default network, `voyage`, is MOI's **devnet**. KMOI there is test
+> currency with no real value — claim some free from the
+> [Voyage faucet](https://voyage.moi.technology/faucet/), or ask in the
+> [MOI Discord](https://discord.gg/5gG6efFN4s) if the faucet is empty.
+> Mainnet is not yet supported by this server; see
+> [Configuration](#configuration).
+
 ## Two transports
 
 | | stdio (local) | HTTP (hostable) |
@@ -47,7 +63,7 @@ over the network by construction rather than by configuration.
 
 ```bash
 PORT=8787 node dist/http.js                          # local build -> http://localhost:8787/mcp
-PORT=8787 npx -p @moi-protocol/mcp-server moi-mcp-http   # from npm
+PORT=8787 npx -y -p @moi-protocol/mcp-server moi-mcp-http   # from npm
 curl localhost:8787/health
 ```
 
@@ -63,16 +79,32 @@ with nothing configured.
     "moi": {
       "command": "npx",
       "args": ["-y", "@moi-protocol/mcp-server"],
-      "env": { "MOI_NETWORK": "voyage", "WC_PROJECT_ID": "<from cloud.reown.com>" }
+      "env": { "MOI_NETWORK": "voyage", "WC_PROJECT_ID": "REPLACE_WITH_YOUR_PROJECT_ID" }
     }
   }
 }
 ```
 
-Drop that in `claude_desktop_config.json` and restart Claude. Ready-made copies
-live in [`examples/`](./examples): Claude Desktop, Cursor, and OpenClaw.
+Get a project id from [cloud.reown.com](https://cloud.reown.com) — it's free,
+and it's a public identifier, not a secret.
 
-Then pair once, either from the terminal or from inside a chat:
+**Where `claude_desktop_config.json` lives:**
+
+| OS | Path |
+|---|---|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+The file may not exist yet if you've never launched Claude Desktop — open the
+app once, quit it, and the file appears. If it already has an `mcpServers`
+block (from another server), **merge** — add `"moi"` as a new key inside that
+block, don't overwrite the file.
+
+Ready-made copies live in [`examples/`](./examples): Claude Desktop, Cursor, and OpenClaw.
+
+Restart Claude Desktop completely (quit the app, not just the window) after
+editing, then pair once, either from the terminal or from inside a chat:
 
 ```bash
 npx -y -p @moi-protocol/mcp-server moi-mcp pair

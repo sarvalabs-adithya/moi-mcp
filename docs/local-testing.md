@@ -46,7 +46,7 @@ runs the built file, not the TypeScript.
       "args": ["/Users/<me>/moi-mcp/dist/index.js"],
       "env": {
         "MOI_NETWORK": "voyage",
-        "WC_PROJECT_ID": "<from cloud.reown.com>"
+        "WC_PROJECT_ID": "REPLACE_WITH_YOUR_PROJECT_ID"
       }
     }
   }
@@ -62,6 +62,11 @@ directory. Replace `<me>` with your username; `echo $HOME` if unsure.
 |---|---|
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+
+The file may not exist yet if you've never launched Claude Desktop — open the
+app once, quit it, and the file appears. If it already has an `mcpServers`
+block, merge into it rather than overwriting the file.
 
 Cursor reads `.cursor/mcp.json` in the project root, same JSON shape.
 
@@ -80,7 +85,7 @@ Once the package is on npm, drop the local path:
       "args": ["-y", "@moi-protocol/mcp-server"],
       "env": {
         "MOI_NETWORK": "voyage",
-        "WC_PROJECT_ID": "<from cloud.reown.com>"
+        "WC_PROJECT_ID": "REPLACE_WITH_YOUR_PROJECT_ID"
       }
     }
   }
