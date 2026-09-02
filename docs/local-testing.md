@@ -22,7 +22,9 @@ is scoped to a **read-only HTTP transport**, which has none of these problems.
 wallet included. `moi-mcp-http` is the read-only service — 6 tools, no wallet,
 no `WC_PROJECT_ID`, stateless, hostable. This page covers the stdio one; for
 the HTTP one, `PORT=8787 node dist/http.js` and point a client at
-`http://localhost:8787/mcp`.
+`http://localhost:8787/mcp`. Run the file directly: in 0.1.0 the
+`moi-mcp-http` bin symlink exits silently (`src/http.ts:162`), and `/health`
+answers 503 unless `WC_PROJECT_ID` is set even though the tools do not need it.
 
 ## Build it
 
@@ -193,11 +195,18 @@ tapped.
 
 ### Everything looks right and the first send still fails
 
-Flip the payload encoding before debugging anything else:
+Read the tool's message first — it says which stage failed:
 
-```json
-"env": { "MOI_WC_PARAM_STYLE": "ix_args", ... }
-```
+- **"The node says this interaction would fail (receipt status N)"** — the
+  simulation refused it before anything reached the phone. For
+  `moi_create_asset` this is nearly always the default `storageFund`
+  (1,000,000 KMOI) exceeding your balance; pass `storageFund: "50000"`.
+- **"holds X of … but the transfer needs Y"** — balance pre-check, local.
+- **"You approved the interaction but broadcasting it failed"** — the phone
+  signed, the node rejected `moi.SendInteractions`. Usually a stale sequence
+  number; retry once. The stderr line `[moi-mcp] debug: raw wallet error …`
+  shows the wallet's own error if the phone was the one that failed.
 
-The WalletConnect payload shape is inferred from the reference dapp rather than
-from a published spec. See `docs/findings.md`.
+The wallet payload (`moi.signInteraction`, `params: [ixObject]`) is confirmed
+against the real wallet, so `MOI_WC_PARAM_STYLE` is not a knob worth turning —
+it only affects the unused `moi.sendInteractions` path. See `docs/findings.md` §1.

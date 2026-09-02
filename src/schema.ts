@@ -36,9 +36,9 @@ export const InteractionHash = HexId;
 
 /** CAIP-2 chain id used in WalletConnect namespaces. CONFIRM VALUES. */
 export const CAIP2 = z.record(Network, z.string()).default({
-  voyage: "moi:voyage",     // TODO confirm
-  mainnet: "moi:mainnet",   // TODO confirm
-  custom: "moi:custom",
+  voyage: "moi:14",         // verified against MOI Wallet + sarvalabs/wallet-connect-dapp
+  mainnet: "moi:mainnet",   // PLACEHOLDER — no published mainnet chain id
+  custom: "moi:custom",     // PLACEHOLDER — set to your chain's id
 });
 
 // ---------------------------------------------------------------------------

@@ -34,10 +34,15 @@ export function mcpError(
   message: string,
   data?: Record<string, unknown>,
 ): McpError {
-  return new McpError(JSONRPC_FOR[code] ?? JsonRpcErrorCode.InternalError, message, {
-    code,
-    ...data,
-  });
+  // The string code ALSO goes into the message: the SDK's tools/call wrapper
+  // renders a thrown McpError as {isError, content:[{text: error.message}]}
+  // and drops `data`, so data.code alone never reaches the client. Agents
+  // branch on text; give them a stable token to branch on.
+  return new McpError(
+    JSONRPC_FOR[code] ?? JsonRpcErrorCode.InternalError,
+    `[${code}] ${message}`,
+    { code, ...data },
+  );
 }
 
 /** Throwing form. Use inside tool handlers. */

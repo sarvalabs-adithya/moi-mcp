@@ -17,7 +17,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { realpathSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { z } from "zod";
 
@@ -143,6 +145,11 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
 async function main(): Promise<void> {
   const port = Number(process.env["PORT"] ?? 8787);
 
+  // The read-only server needs no WalletConnect project id — it registers no
+  // wallet tools — but the shared Config schema requires one. Satisfy it with
+  // an explicit dummy so reads and /health work with nothing configured.
+  process.env["WC_PROJECT_ID"] ??= "0".repeat(32);
+
   try {
     const cfg = getConfig();
     const info = NETWORKS[cfg.MOI_NETWORK];
@@ -159,7 +166,20 @@ async function main(): Promise<void> {
 }
 
 // Only run when executed directly, so tests can import buildReadOnlyServer.
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop() ?? "")) {
+// npm installs bins as SYMLINKS (node_modules/.bin/moi-mcp-http -> dist/http.js),
+// so argv[1]'s basename differs from this module's file name and a naive
+// endsWith() check makes the bin exit silently. Compare realpaths instead.
+const isMain = (() => {
+  try {
+    return process.argv[1]
+      ? import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+      : false;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   main().catch((err: unknown) => {
     process.stderr.write(`[moi-mcp] fatal: ${messageOf(err)}\n`);
     process.exit(1);

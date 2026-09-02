@@ -54,12 +54,19 @@ Confirm it landed:
 
 ## 5. Send something (30 sec)
 
-> send 1 MOI to 0x…
+> send 1 KMOI to 0x…
 
-The agent resolves the asset, checks your balance, builds the interaction, and
-pushes it to your phone. **Nothing moves until you tap Send.** Reject it and you
-get back `{"status":"rejected","reason":"user_rejected"}`. Ignore it for five
-minutes and you get `"timeout"`.
+The agent resolves the asset, checks your balance, builds the interaction,
+simulates it against the node, and pushes it to your phone. **Nothing is signed
+until you tap Approve.** The phone returns the signature; the server broadcasts
+it and hands you the hash. Reject it and you get back
+`{"status":"rejected","reason":"user_rejected"}`. Ignore it for five minutes and
+you get `"timeout"`.
+
+Creating a token works the same way — `create an asset called MCPTEST with
+supply 1000 and storageFund 50000`. A new asset must hold some KMOI to pay for
+its own storage; the default is 1,000,000, so pass a smaller `storageFund` on a
+small devnet balance.
 
 > _[screenshot: approval screen, then the interaction hash in chat]_
 
@@ -70,8 +77,9 @@ Then:
 ## What just happened
 
 Your agent never saw a private key. It read the chain over JSON-RPC, built an
-unsigned interaction locally, and sent it over the WalletConnect relay to the
-only thing that can sign — your phone.
+unsigned interaction locally, sent it over the WalletConnect relay to the only
+thing that can sign — your phone — and then submitted the signed bytes to the
+node itself. The server relays a signature; it never produces one.
 
 ## Next
 

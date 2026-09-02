@@ -42,7 +42,8 @@
     "pair": "node dist/cli.js pair",
     "status": "node dist/cli.js status",
     "dev:http": "tsx src/http.ts",
-    "start:http": "node dist/http.js"
+    "start:http": "node dist/http.js",
+    "cross-check": "node scripts/cross-check.mjs"
   },
   "keywords": [
     "mcp",

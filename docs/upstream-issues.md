@@ -1,8 +1,10 @@
-# Three issues in the MOI stack
+# Issues in the MOI stack
 
-Found while building an MCP server against voyage devnet, 2026-08-26. Each is
-reproducible and each blocks any third-party integrator, not just us. Filed
-here so they can be raised independently of anything else.
+Found while building an MCP server against voyage devnet, 2026-08-26 to
+2026-09-01. Each is reproducible and each blocks any third-party integrator, not
+just us. Filed here so they can be raised independently of anything else.
+Asset creation is **not** on this list: it works once the new asset is funded
+with KMOI for its own storage, which the server now does automatically.
 
 Environment: `js-moi-sdk@0.8.0`, `js-moi-agent-registry@0.3.0-rc1`,
 MOI Wallet mobile over WalletConnect v2, RPC
@@ -43,11 +45,13 @@ The same interaction simulates cleanly against the node (`moi.Call` →
 broadcasts successfully via the workaround below. So the interaction is valid;
 the wallet fails while writing its own metadata row.
 
-**Workaround:** use `moi.signInteraction` and broadcast the returned
+**Workaround, and what the server ships:** call `moi.signInteraction` with
+the same positional `params: [ix]`, and broadcast the returned
 `{ ix_args, signatures }` yourself via the node's `moi.SendInteractions`. That
 path works — confirmed on chain at
 `0x3c568254d339090d1e0ec256f9ac46fe288aab7d7739275e2267ddff3fdbc009`
-(status 0, 299 fuel).
+(status 0, 299 fuel). The phone still shows the approval screen and still
+holds the only key; the dapp merely relays the signed bytes.
 
 **Note:** a dapp should never see a SQLite constraint error. Even once the
 underlying cause is fixed, a validation failure would be more useful than an
@@ -151,8 +155,41 @@ should simulation not require a resolvable sender?
 
 ---
 
+## 5. Delegation surfaces are half-implemented and half-documented
+
+**Severity: anyone designing agent spend control will pick the wrong primitive.**
+
+MOI has three things that look like delegation (`docs/findings.md` §6 has the
+evidence):
+
+- **Access policies** (`ACCESS_CREATE/UPDATE/DELETE`): `ResourceType` declares
+  `STORAGE/ASSET/LOGIC/KEY` and `AccessAction` declares `ASSET_ACCESS` and
+  `LOGIC_ACCESS`, but the SDK validator throws on anything except `STORAGE`
+  and the devnet node answers `only 'storage' resource type is implemented`.
+  The policy type has no amount, limit, rate or expiry field. The
+  `moi.AccessPolicy` / `moi.AccessPolicies` RPCs and the SDK `Access` class
+  are not in the public docs.
+- **Account keys** (`ACCOUNT_CONFIGURE`): weights 0–1000 against a fixed
+  threshold of 1000. No per-key scope, cap or expiry. Documented.
+- **MAS0 mandates** (`Approve`/`TransferFrom`/`Revoke`): amount + `expires_at`
+  per (asset, grantee), revocable, and the grantee signs with its own key.
+  Documented as "Mandates"; `moi.Mandates` RPC documented; no provider helper
+  in `js-moi-providers@0.8.0`. Whether the cap decrements cumulatively across
+  `TransferFrom`s is not stated.
+
+**Suggested fix:** document which `ResourceType`/`AccessAction` values are live
+per network, publish the access-policy RPCs, and state mandate accounting.
+
 ## Also worth knowing
 
 `moi.sendInteractions` (wallet, camelCase) and `moi.SendInteractions` (node,
 PascalCase) differ only in casing and do different things on different
 transports. That is a genuine trap; naming them distinctly would help.
+
+Manifest elements that are routines carry `kind: "callable"`, not `"routine"`
+(`js-moi-utils` `ElementType.ROUTINE = "callable"`). Anyone filtering a raw
+manifest by the obvious word gets an empty list — we did.
+
+The node returns `asset_deeds` on `moi.AccountState` where the SDK type says
+`asset_approvals`, and returns no `nonce` (issue 2). Two more places the types
+and the wire disagree.

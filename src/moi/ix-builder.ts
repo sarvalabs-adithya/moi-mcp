@@ -281,17 +281,40 @@ export async function simulate(
   const fuelUsed = Number(BigInt(String(receipt["fuel_used"] ?? 0)));
   if (status === 0) return { ok: true, status, fuelUsed };
 
-  // Surface any per-operation error the node bothered to fill in.
+  // Surface any per-operation error the node bothered to fill in. The error
+  // arrives POLO-encoded ("0x0e7f06…"); best-effort extract the printable
+  // strings inside so the user reads "builtin.AssetError insufficient funds"
+  // rather than a hex blob.
   const ops = (receipt["ix_operations"] ?? []) as Array<Record<string, unknown>>;
   const opDetail = ops
     .map((o) => {
       const data = (o["data"] ?? {}) as Record<string, unknown>;
       const err = String(data["error"] ?? "");
-      return err && err !== "0x" ? err : `op status ${String(o["status"])}`;
+      if (err && err !== "0x") return decodeErrorHex(err) ?? err;
+      return `op status ${String(o["status"])}`;
     })
     .join("; ");
 
   return { ok: false, status, fuelUsed, detail: opDetail };
+}
+
+/** Pull printable ASCII runs (≥4 chars) out of a POLO-encoded error blob. */
+export function decodeErrorHex(hex: string): string | undefined {
+  const clean = hex.replace(/^0x/, "");
+  if (!/^[0-9a-fA-F]*$/.test(clean) || clean.length < 8) return undefined;
+  const runs: string[] = [];
+  let current = "";
+  for (let i = 0; i + 1 < clean.length; i += 2) {
+    const byte = parseInt(clean.slice(i, i + 2), 16);
+    if (byte >= 0x20 && byte < 0x7f) {
+      current += String.fromCharCode(byte);
+    } else {
+      if (current.length >= 4) runs.push(current);
+      current = "";
+    }
+  }
+  if (current.length >= 4) runs.push(current);
+  return runs.length ? runs.join(" ") : undefined;
 }
 
 /**

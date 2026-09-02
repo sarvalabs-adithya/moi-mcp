@@ -236,8 +236,12 @@ export async function getLogic(
     | undefined;
 
   const elements = (parsed?.["elements"] ?? []) as Array<Record<string, unknown>>;
+  // The wire format names routines "callable" (js-moi-utils ElementType.ROUTINE
+  // === "callable"; the SDK's own logic-driver matches on it). Filtering on
+  // "routine" returned zero routines for every real logic. Accept both, since
+  // "routine" is the name the enum KEY uses and may appear in older manifests.
   const routines = (Array.isArray(elements) ? elements : [])
-    .filter((el) => String(el["kind"] ?? "") === "routine")
+    .filter((el) => ["callable", "routine"].includes(String(el["kind"] ?? "")))
     .map((el) => {
       const data = (el["data"] ?? {}) as Record<string, unknown>;
       const accepts = (data["accepts"] ?? []) as Array<Record<string, unknown>>;

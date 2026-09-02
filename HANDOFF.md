@@ -1,79 +1,120 @@
 # Handoff
 
-Built overnight, 2026-08-26. Phases 0–3 complete and verified; Phase 4 drafted
-but nothing executed; Phase 5 not started (correctly — it's v2 backlog).
+State as of 2026-09-01. Two repos: `~/moi-mcp` (TypeScript, stdio + read-only
+HTTP, wallet writes) and `~/moi-mcp-go` (Go, read-only, stdio + stateless
+HTTP). Nothing is published to npm; nothing is committed from today's session
+(see "Uncommitted" below).
 
-## State
+**Tomorrow morning: follow `READY-TO-TEST.md` top to bottom.** It is the
+ordered checklist with exact commands.
 
-| Phase | Status |
-|---|---|
-| 0 Scaffold | Done, plus your five review fixes |
-| 1 Read path | Done. Verified against live voyage devnet |
-| 2 WalletConnect + writes | Done. **One check needs your phone** |
-| 3 Packaging | Done. **Not published to npm** |
-| 4 Distribution | Copy drafted. **Nothing submitted or posted** |
-| 5 v2 backlog | Not started, as instructed |
+## What is verified
 
-78 unit tests pass. Typecheck clean. Fresh-install from the packed tarball
-starts and serves 12 tools + 2 resources.
+| Area | Status | Evidence |
+|---|---|---|
+| Unit tests | 168 pass, 5 skipped (the `MOI_E2E`-gated live tests) | `npm test`, 1.5 s |
+| Typecheck, build, pack | clean; tarball 30 files, 183 kB | fresh-install run from the packed tarball |
+| stdio server | 12 tools, 2 resources, stdout 100 % JSON, stderr empty at `LOG_LEVEL=error` | JSON-RPC sweep, unpaired and paired |
+| Reads on devnet | nonce 5, 95699 KMOI, KMOI/MAS0/supply 90000000100000, interaction `0x3c5682…` success/299 fuel | `npm run test:e2e`, `npm run cross-check` |
+| Go vs TS | all 10 compared fields identical, raw output byte-identical | `npm run cross-check` exit 0 |
+| Go repo | build/vet/gofmt/test clean; stdio + `-http` + `/health` + error paths | driven by script; `MOI_E2E=1 go test -run TestLive ./internal/moirpc/` |
+| Wallet guards | unpaired → `wallet_disconnected`; other network → `network_mismatch`; expired → `wallet_disconnected`; insufficient balance refused before fuel/simulate/relay; simulation failure refused with hint | hermetic tool-handler tests + paired sweep against the real session |
+| Write mechanism | sign on phone (`moi.signInteraction`, `params: [ixObject]`) then broadcast from here (`moi.SendInteractions`) — proven on chain at `0x3c5682…` | `docs/upstream-issues.md` §1 |
+| `moi_create_asset` | bundles `ASSET_CREATE` + KMOI funding transfer to the derived asset id; `storageFund` param; default 1,000,000 exceeds the test account so it refuses locally with the hint | paired sweep, hermetic tests |
 
-## The three things blocking you
+## What needs a phone
 
-1. **Scan a QR with MOI Wallet.** Everything up to the relay handshake is
-   verified, but no automation can approve on a phone. Needs a real
-   `WC_PROJECT_ID` from cloud.reown.com first.
-2. **Decide the npm scope and publish.** Both `@moi-protocol` and `@sarvalabs`
-   are free. `npm publish --access public`, or push a `v0.1.0` tag.
-3. **Answer Q1/Q2/Q3** in `PLAN.md` §7 with Rahul. Q1 is the one that could
-   invalidate the write path.
+No automation can tap Approve. Unverified through the tools with a real tap:
 
-## Read this first, before trusting the write path
+- `moi_transfer` → Approve → `{status:"sent", hash}`
+- `moi_create_asset` with `storageFund: 50000` → Approve → `sent`
+- `moi_transfer` → ignore 5 min → `timeout`
+- switch wallet network → `network_mismatch`
+- `moi_disconnect_wallet` then write → `wallet_disconnected`
 
-The plan assumed WalletConnect takes `{ ix_args: <POLO hex> }`. Evidence says
-otherwise: the wallet takes the **plain `InteractionObject`, positionally** —
-`params: [ix]`. The `ix_args` POLO form is the *node-level* call the wallet
-makes afterwards. Two transports, easy to conflate.
+`READY-TO-TEST.md` §5 walks them in order with expected output. The paired
+session in `~/.moi-mcp/session.json` expires **2026-09-02 05:03 UTC**; re-pair
+first if `npm run status` says not connected.
 
-I implemented the evidenced form and left `MOI_WC_PARAM_STYLE=ix_args` as a
-one-env-var switch to the other. If the first real send fails, flip it before
-debugging anything else.
+## Bugs found today, not yet fixed (src/ was out of scope for the doc pass)
 
-Because of that, `schema.WcSendInteractionsParams` no longer matches what goes
-on the wire. I did not restructure schema.ts. Worth reconciling once Rahul
-confirms.
+1. **`moi_get_logic` returns `routines: []` for every logic.**
+   `src/moi/reads.ts:240` filters manifest elements on `kind === "routine"`;
+   the manifest (and `js-moi-utils` `ElementType.ROUTINE`) uses `"callable"`.
+   The registry logic has 14 callables (deploy/invoke/internal), 11 via
+   `getLogicDriver`. Fix: accept `"callable"`, and map `internal` out of the
+   `invoke|deploy|enlist|view` enum. `test/unit/tools-reads.test.ts` has an
+   `it.fails` for this — flip it to `it` once fixed.
+2. **`moi-mcp-http` bin never starts via the npm symlink** (`src/http.ts:162`).
+   The main-module guard compares `basename(process.argv[1])` — the symlink
+   `moi-mcp-http` — with `import.meta.url` ending `http.js`. Exit 0, no
+   output, nothing listening. `node dist/http.js` works. Fix: `realpathSync`
+   argv[1] and compare `pathToFileURL(...).href`, or move `main()` to a thin
+   bin file like `cli.ts`. Blocks publishing the HTTP bin.
+3. **`GET /health` returns 503 without `WC_PROJECT_ID`** (`src/http.ts:107`).
+   `getConfig()` requires it; the read-only server does not. Compute health
+   from network config only.
+4. **The MOI string error code never reaches the client.** `src/errors.ts`
+   puts `INSUFFICIENT_BALANCE` etc. in `McpError.data.code`, but SDK 1.30's
+   `tools/call` wrapper collapses thrown errors to `{isError, text: message}`.
+   Agents see `MCP error -32600: Account … holds 95699 … needs 999999999.`
+   Put the code in the message, or return `{status:"error", code, message}`
+   (already in `schema.WriteResult`, never produced).
+5. Minor: `moi_call_logic` calls `wc.currentSession()` before the `view`
+   branch (`src/tools/writes.ts:307`), so an unpaired view initialises the real
+   SignClient for nothing. `src/wc/client.ts:246,319` write debug lines with
+   `process.stderr.write`, bypassing `LOG_LEVEL`. `src/schema.ts:38` `CAIP2`
+   default still says `moi:voyage` (unused; `provider.ts` has the verified
+   `moi:14`). Simulation failure reasons are surfaced as raw POLO hex.
 
-## Four things I'd want a second opinion on
+## Design notes worth a second opinion
 
-- **`ReadOnlySigner`** (`src/moi/provider.ts`) — the SDK routes read-only logic
-  calls through a `Signer`, so this one carries a provider and throws on both
-  signing methods. It's how the zero-key invariant is enforced rather than
-  documented, but it is a deliberate misuse of an abstract class.
-- **Write tools advertise a permissive output shape.** MCP SDK 1.30 can't
+- **`ReadOnlySigner`** (`src/moi/provider.ts`) — the SDK routes read-only
+  logic calls through a `Signer`; this one carries a provider and throws on
+  both signing methods. Deliberate misuse of an abstract class, and how the
+  zero-key invariant is enforced.
+- **Write tools advertise a permissive output shape.** MCP SDK 1.30 cannot
   convert a Zod 3 discriminated union to JSON Schema, so they publish the
-  superset of `WriteResult`'s three variants and validate against the strict
-  union internally. Correct behaviour, looser published contract.
-- **`src/moi-error.ts` is a file the plan's layout doesn't have.** It exists so
-  `src/moi/*` and `src/wc/*` can throw typed errors without importing
-  `errors.ts`, which pulls in the MCP SDK — the rule you set.
-- **`moi_resolve_agent` scans.** The registry has no name index, so a
-  handle/name lookup pages through up to `MAX_SCAN` (200) profiles and fetches
-  HTTP agent cards. Fine while the registry is small; needs an index later.
+  superset of `WriteResult`'s variants and validate the strict union before
+  returning. A regression test checks `hash`/`explorerUrl` are not required.
+- **`MOI_WC_PARAM_STYLE` is nearly dead.** It only changes the payload of
+  `sendInteraction()`, which no tool calls. `schema.WcSendInteractionsParams`
+  models the unused path. Worth removing both once the wallet bug is fixed or
+  declared permanent.
+- **`toInteractionArgs` mutates.** `withMeasuredFuel`/`assertWillSucceed` hand
+  the unsigned interaction to js-moi-sdk, which rewrites `ix.participants` in
+  place; the wallet therefore sees the SDK-normalised participant list. Tests
+  cover the resulting wire payload as-is.
+- **`moi_resolve_agent` scans** up to 200 profiles and fetches agent cards
+  over HTTP. Fine while the registry is small.
 
-## Known gaps, stated plainly
+## Open questions
 
-- Registry reads return `found:false` on devnet because the logic has no state
-  object. Could be an empty registry or the caller-identity issue (new Q7 in
-  PLAN.md). Set `MOI_READ_CALLER` to a real participant to test.
-- `moi_get_logic` parses the manifest defensively; routine `kind` mapping is
-  best-effort and untested against a real Cocolang manifest with view routines.
-- Mainnet is unreachable by design — no published RPC or chain id.
-- No e2e test exercises a real approved write. That gap closes when item 1 does.
+- npm scope: `@moi-protocol` (current) vs `@sarvalabs`. Both unclaimed.
+- Ship a shared `WC_PROJECT_ID` or make users bring their own (current).
+- Mainnet CAIP-2 id and RPC URL — none published anywhere.
+- Canonical read-only caller for logic simulation (`PLAN.md` §7 Q7).
+- Delegation: MOI has account keys (`ACCOUNT_CONFIGURE`), access policies
+  (`ACCESS_CREATE/UPDATE/DELETE`, storage-only today) and MAS0 mandates
+  (`Approve`/`TransferFrom`/`Revoke`, amount + expiry). Only mandates carry a
+  budget. `docs/findings.md` §6 has the full picture and what a
+  `moi_transfer_from` tool would need.
+
+## Uncommitted
+
+`~/moi-mcp`: `package.json` (`cross-check` script), `scripts/cross-check.mjs`,
+`test/helpers/{harness,mock-node}.ts`, `test/unit/{tools-reads,tools-wallet,
+tools-writes,resources}.test.ts`, and every doc touched today.
+`~/moi-mcp-go`: `internal/moirpc/live_test.go`. `go.mod` lists direct deps as
+`// indirect` — `go mod tidy` when convenient.
 
 ## Commands
 
 ```bash
-cd ~/moi-mcp && npm test          # 78 tests
-npm run typecheck && npm run build
-npm run inspect                    # MCP Inspector against source
-WC_PROJECT_ID=... node dist/cli.js pair
+cd ~/moi-mcp && npm test && npm run typecheck && npm run build   # 168 tests
+npm run test:e2e                # live devnet reads
+npm run cross-check             # TS vs Go, 10 fields
+npm run status                  # wallet session; npm run pair if not connected
+npm run inspect                 # MCP Inspector against source
+cd ~/moi-mcp-go && export PATH="/opt/homebrew/bin:$PATH" && go build -o bin/moi-mcp ./cmd/moi-mcp && go test ./...
 ```

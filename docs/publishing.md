@@ -12,9 +12,19 @@ blockers, and what to deliberately not do yet.
 `@moi-protocol`. This is Rahul's call, not a technical one — whoever owns the
 npm org owns the release. Claiming the wrong scope is awkward to undo.
 
-**2. Complete the wallet checks.** `docs/testing-plan.md` Tier 3, checks 1–3.
-Publishing a write path no human has ever approved is not defensible, and the
-mechanism has only been proven by script.
+**2. Complete the wallet checks.** `docs/testing-plan.md` Tier 3, checks 2–3
+(1 is done: a session is paired). Publishing a write path no human has ever
+approved through the tool is not defensible; the sign-then-broadcast mechanism
+is proven by script and on chain, the tool round-trip is not. `READY-TO-TEST.md`
+§5 is the script.
+
+**2a. Fix the two HTTP bugs the tarball test found.** `moi-mcp-http` exits
+silently when run through the npm bin symlink (`src/http.ts:162` main-module
+guard), and `GET /health` returns 503 without `WC_PROJECT_ID`
+(`src/http.ts:107`). Shipping `bin.moi-mcp-http` in that state means
+`npx -p @moi-protocol/mcp-server moi-mcp-http` does nothing. Also fix
+`moi_get_logic` returning no routines (`src/moi/reads.ts:240`) — it is in the
+tool table.
 
 **3. Create the GitHub repo.** `sarvalabs/moi-mcp`. The CLI already points at
 its issue tracker, and every directory submission needs a repo URL.
@@ -35,6 +45,8 @@ npm run typecheck && npm test && npm run build
 npm pack
 cd $(mktemp -d) && npm init -y && npm install <path>/moi-protocol-mcp-server-0.1.0.tgz
 ./node_modules/.bin/moi-mcp help          # bin must resolve or npx is broken
+PORT=8799 ./node_modules/.bin/moi-mcp-http & sleep 2 && curl -s localhost:8799/health; kill %1
+                                          # must print {"ok":true,...}; in 0.1.0 as packed it exits silently
 
 # 2. Tag — CI publishes on v*
 git tag v0.1.0 && git push origin v0.1.0
@@ -44,13 +56,15 @@ git tag v0.1.0 && git push origin v0.1.0
 `npm publish --access public --provenance` using `NPM_TOKEN`. Add that secret
 to the repo before tagging.
 
-**Publish `0.1.0`, not `1.0.0`.** The write path depends on a wallet bug
-workaround. When `moi.sendInteractions` is fixed the implementation changes,
-and a 0.x lets that be a minor bump rather than a breaking one.
+**Publish `0.1.0`, not `1.0.0`.** The write path signs on the phone and
+broadcasts from the server because the wallet's own sign-and-send crashes.
+When `moi.sendInteractions` is fixed the implementation may change, and a 0.x
+lets that be a minor bump rather than a breaking one.
 
 ### What ships
 
-`dist/`, `README.md`, `docs/`, `examples/`, `.env.example` — 28 files, ~160KB.
+`dist/`, `README.md`, `docs/`, `examples/`, `.env.example` — 30 files, 183 kB
+packed / 669 kB unpacked (last `npm pack`). `scripts/` and `test/` do not ship.
 Two binaries: `moi-mcp` (stdio, wallet) and `moi-mcp-http` (read-only).
 
 ### The Go service

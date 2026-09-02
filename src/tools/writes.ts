@@ -315,10 +315,9 @@ export function registerWriteTools(server: McpServer): void {
     async ({ logicId, routine, args, kind }) => {
       try {
         const cfg = getConfig();
-        const wc = walletClient();
-        const session = await wc.currentSession();
-
-        // A view runs against the node directly — no wallet, no approval.
+        // A view runs against the node directly — no wallet, no approval, and
+        // no wallet-client construction either: currentSession() would spin up
+        // a real SignClient (relay connection, wc.db) for a read.
         if (kind === "view") {
           const signer = getReadOnlySigner(providerOptions());
           const { getLogicDriver } = await import("js-moi-sdk");
@@ -346,7 +345,8 @@ export function registerWriteTools(server: McpServer): void {
           };
         }
 
-        const valid = requireSession(session, cfg.MOI_NETWORK);
+        const wc = walletClient();
+        const valid = requireSession(await wc.currentSession(), cfg.MOI_NETWORK);
         const payload = await encodeLogicCall(
           getReadOnlySigner(providerOptions()),
           logicId,

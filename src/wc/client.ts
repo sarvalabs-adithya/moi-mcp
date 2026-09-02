@@ -11,7 +11,7 @@
 // undefined. `import SignClient from ...` fails at runtime, not compile time.
 import { SignClient } from "@walletconnect/sign-client";
 
-import { WC_PROJECT_ID_HELP } from "../config.js";
+import { log, WC_PROJECT_ID_HELP } from "../config.js";
 import { MoiError } from "../moi-error.js";
 import {
   ErrorCode,
@@ -325,9 +325,8 @@ export class WalletConnectClient {
       // Log the raw shape once: the translated message is for the agent, but
       // an unrecognised wallet error is only debuggable from the original.
       try {
-        process.stderr.write(
-          `[moi-mcp] debug: raw wallet error ${JSON.stringify(err, Object.getOwnPropertyNames(Object(err))).slice(0, 500)}\n`,
-        );
+        // Through log() so LOG_LEVEL=silent actually silences it.
+        log("debug", `raw wallet error ${JSON.stringify(err, Object.getOwnPropertyNames(Object(err))).slice(0, 500)}`);
       } catch {
         /* never let diagnostics break the error path */
       }

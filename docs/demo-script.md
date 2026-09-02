@@ -98,10 +98,19 @@ over it.
 - **If it returns `network_mismatch`:** your wallet moved networks. Worth a
   sentence if you're feeling confident — *"it refused to sign for the wrong
   chain"* — but cleaner to fix and re-record.
-- **If it returns `insufficient_balance`:** you used the wrong asset id or too
-  large an amount. Lower the amount; the balance you just read is on screen.
-- **If nothing arrives on the phone within ~10s:** stop. Flipping
-  `MOI_WC_PARAM_STYLE=ix_args` is the fix to try, but not on camera.
+- **If it says "holds X … but the transfer needs Y":** you used the wrong
+  asset id or too large an amount. Lower the amount; the balance you just read
+  is on screen.
+- **If it says "The node says this interaction would fail":** the simulation
+  refused it before the phone was involved. Read the reason, fix the input,
+  re-record.
+- **If nothing arrives on the phone within ~10s:** stop. Check
+  `moi_wallet_status` (session may have expired) and the relay; the payload
+  shape itself is confirmed against the real wallet, so do not go looking for
+  an encoding switch.
+- **If the phone approves but the tool says "broadcasting it failed":** the
+  signature is fine and the node rejected it — usually a stale sequence
+  number. Re-run once; do not patch it in the edit.
 
 ### 0:50–0:58 — Confirm
 
@@ -122,10 +131,14 @@ did that land?
 ## What to say if asked "so it can't run unattended?"
 
 Answer it straight, don't dodge: **correct, and that's the trade.** Every write
-waits for a human. The fix is session keys with spend caps — an agent authorised
-for a capped daily amount, revocable, never holding the account key. MOI doesn't
-expose that primitive yet. Until it does, a hot key on the server is not a
-solution to it.
+waits for a human. The next step is capability, not custody: MOI's MAS0 assets
+already have mandates — the owner `Approve`s an agent wallet for an amount
+until an expiry, the agent signs `TransferFrom` with its own key, the owner can
+`Revoke` at any time. This server does not build `TransferFrom` yet, and a
+mandate is a single cap per asset with no per-transaction limit or rate, so
+richer policy needs a Logic. Either way, a hot key on the server is not the
+answer. (MOI also has weighted account keys and storage access policies;
+neither carries a budget. `docs/findings.md` §6.)
 
 ## Recording notes
 
