@@ -27,7 +27,8 @@ describe("loadConfig", () => {
     const cfg = loadConfig(baseEnv());
 
     expect(cfg.MOI_NETWORK).toBe("voyage");
-    expect(cfg.REQUEST_TIMEOUT_MS).toBe(300_000);
+    // Under the MCP client's 60s timeout on purpose — see schema.ts.
+    expect(cfg.REQUEST_TIMEOUT_MS).toBe(55_000);
     expect(cfg.LOG_LEVEL).toBe("error");
     expect(cfg.MOI_EXPLORER_URL).toBe("https://voyage.moi.technology");
   });
@@ -83,5 +84,23 @@ describe("expandHome", () => {
 
   it("leaves an absolute path untouched", () => {
     expect(expandHome("/var/tmp/moi")).toBe("/var/tmp/moi");
+  });
+});
+
+describe("request timeout stays under the client's", () => {
+  /**
+   * The MCP client gives up after 60s by default. If the server waits longer,
+   * the client reports a timeout while the approval is still live on the
+   * phone — and a later tap broadcasts an interaction the user thinks was
+   * cancelled.
+   */
+  it("defaults below the SDK's 60s client timeout", () => {
+    const cfg = loadConfig(baseEnv());
+    expect(cfg.REQUEST_TIMEOUT_MS).toBeLessThan(60_000);
+  });
+
+  it("still allows an explicit longer wait for non-MCP callers like the CLI", () => {
+    const cfg = loadConfig(baseEnv({ REQUEST_TIMEOUT_MS: "300000" }));
+    expect(cfg.REQUEST_TIMEOUT_MS).toBe(300_000);
   });
 });

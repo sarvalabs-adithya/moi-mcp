@@ -38,7 +38,7 @@ you: send 50 KMOI to the agent called pricefeed-01
 | Run as | child process of your MCP client | a service behind a URL |
 
 The split is forced by what a wallet needs. A WalletConnect session is a
-persistent relay socket and a pending approval waits up to five minutes for a
+persistent relay socket and a pending approval waits the better part of a minute for a
 phone tap — neither survives a stateless request/response service. So writes
 stay local, and reads run behind a URL.
 
@@ -132,7 +132,7 @@ lists the real ones in its error message.
   WalletConnect keystore and session — no key material, but still a handle to a
   wallet.
 - **Nothing is auto-approved.** Every write waits for a human tap, and times out
-  (default 5 minutes) rather than hanging forever.
+  (default 55s, deliberately under the MCP client's 60s) rather than hanging forever.
 
 ## Configuration
 
@@ -147,7 +147,7 @@ used.
 | `WC_PROJECT_ID` | — | **Required** for the stdio server. From [cloud.reown.com](https://cloud.reown.com), 32 hex chars; placeholders are rejected |
 | `MOI_MCP_HOME` | `~/.moi-mcp` | Session + WalletConnect keystore |
 | `MOI_EXPLORER_URL` | `https://voyage.moi.technology` | Used to build `explorerUrl` in write results |
-| `REQUEST_TIMEOUT_MS` | `300000` | How long to wait for the phone |
+| `REQUEST_TIMEOUT_MS` | `55000` | How long to wait for the phone. Keep it under the client's own timeout (60s in the MCP SDK), or a late tap broadcasts what the client already gave up on |
 | `LOG_LEVEL` | `error` | `silent`, `error`, `info`, `debug`. All logs go to stderr; stdout is the MCP transport |
 | `MOI_AGENT_REGISTRY_LOGIC_ID` | (shipped default) | Same variable `js-moi-agent-registry` uses |
 | `MOI_READ_CALLER` | — | Participant id used as the caller for read-only logic simulation |

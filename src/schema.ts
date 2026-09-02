@@ -436,7 +436,17 @@ export const Config = z.object({
   WC_PROJECT_ID: z.string().min(1),             // ship a default in package
   MOI_MCP_HOME: z.string().default("~/.moi-mcp"),
   MOI_EXPLORER_URL: z.string().url().default("https://voyage.moi.technology"), // TODO confirm
-  REQUEST_TIMEOUT_MS: z.coerce.number().default(300_000), // 5 min
+  /**
+   * How long to wait for the phone.
+   *
+   * MUST stay under the MCP client's own request timeout, which defaults to
+   * 60s (SDK DEFAULT_REQUEST_TIMEOUT_MSEC). If we wait longer, the client
+   * gives up and reports "Request timed out" while the approval is STILL live
+   * on the phone — and a tap minutes later broadcasts an interaction the user
+   * believes was cancelled. Losing the request is safe; a surprise transfer is
+   * not.
+   */
+  REQUEST_TIMEOUT_MS: z.coerce.number().default(55_000),
   LOG_LEVEL: z.enum(["silent", "error", "info", "debug"]).default("error"),
 });
 export type Config = z.infer<typeof Config>;
