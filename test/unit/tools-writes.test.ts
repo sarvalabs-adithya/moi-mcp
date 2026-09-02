@@ -499,7 +499,7 @@ describe("storageFund is optional in practice, not just in the schema", () => {
 
   it("refuses with an actionable message when the balance cannot cover storage", async () => {
     seedSession(h.home);
-    node.state.kmoiBalance = 20_000n; // below MIN + reserve
+    node.state.kmoiBalance = 15_000n; // below MIN_STORAGE_FUND + FUEL_RESERVE
     const res = await h.call("moi_create_asset", { symbol: "POOR", supply: 1000 });
     expect(res.text).toMatch(/at least 10000 KMOI|INSUFFICIENT_BALANCE/);
     expect(wallet.request).not.toHaveBeenCalled();

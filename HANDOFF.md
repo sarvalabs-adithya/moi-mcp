@@ -14,7 +14,7 @@ ordered checklist with exact commands.
 |---|---|---|
 | Unit tests | 169 pass, 5 skipped (the `MOI_E2E`-gated live tests) | `npm test`, 1.5 s |
 | Typecheck, build, pack | clean; tarball 30 files, 183 kB | fresh-install run from the packed tarball |
-| stdio server | 12 tools, 2 resources, stdout 100 % JSON, stderr empty at `LOG_LEVEL=error` | JSON-RPC sweep, unpaired and paired |
+| stdio server | 13 tools, 2 resources, stdout 100 % JSON, stderr empty at `LOG_LEVEL=error` | JSON-RPC sweep, unpaired and paired |
 | Reads on devnet | nonce 5, 95699 KMOI, KMOI/MAS0/supply 90000000100000, interaction `0x3c5682…` success/299 fuel | `npm run test:e2e`, `npm run cross-check` |
 | Go vs TS | all 10 compared fields identical, raw output byte-identical | `npm run cross-check` exit 0 |
 | Go repo | build/vet/gofmt/test clean; stdio + `-http` + `/health` + error paths | driven by script; `MOI_E2E=1 go test -run TestLive ./internal/moirpc/` |

@@ -347,7 +347,8 @@ describe("chooseStorageFund", () => {
   });
 
   it("refuses clearly rather than building an interaction that fails opaquely", () => {
-    expect(() => chooseStorageFund(20_000n)).toThrow(/at least 10000 KMOI/);
+    // 15,000 - FUEL_RESERVE leaves 5,000, under MIN_STORAGE_FUND.
+    expect(() => chooseStorageFund(15_000n)).toThrow(/at least 10000 KMOI/);
     expect(() => chooseStorageFund(0n)).toThrow(MoiError);
   });
 

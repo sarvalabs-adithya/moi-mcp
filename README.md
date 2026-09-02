@@ -31,7 +31,7 @@ you: send 50 KMOI to the agent called pricefeed-01
 
 | | stdio (local) | HTTP (hostable) |
 |---|---|---|
-| Tools | all 12 | `ping` + the 5 read tools |
+| Tools | all 13 | `ping` + the 5 read tools |
 | Wallet | yes | none |
 | Needs `WC_PROJECT_ID` | yes | no (see note) |
 | State | WalletConnect session | none |
@@ -80,7 +80,7 @@ npx @moi-protocol/mcp-server pair
 
 ## Tools
 
-The stdio server registers all 12. The HTTP server registers the first six.
+The stdio server registers all 13. The HTTP server registers the first six.
 
 | Tool | Wallet needed | What it does |
 |---|---|---|

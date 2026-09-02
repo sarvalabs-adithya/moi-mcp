@@ -164,8 +164,14 @@ export const DEFAULT_STORAGE_FUND = 1_000_000n;
  */
 export const MIN_STORAGE_FUND = 10_000n;
 
-/** KMOI held back so the interaction can still pay its own fuel. */
-export const FUEL_RESERVE = 25_000n;
+/**
+ * KMOI held back so the interaction can still pay its own fuel.
+ *
+ * Measured: an asset create costs 3,404 fuel and a mint 458. 10,000 leaves
+ * ample margin without locking an account out of creating a second asset —
+ * a 25,000 reserve made a 21,596 balance unusable despite being plenty.
+ */
+export const FUEL_RESERVE = 10_000n;
 
 /**
  * Choose a storage fund the caller can actually afford.
@@ -269,6 +275,58 @@ export function buildCreateAsset(
           calldata: String(funding["calldata"] ?? "").replace(/^0x/, ""),
         },
       },
+    ],
+  };
+}
+
+/**
+ * Mint tokens of an existing asset.
+ *
+ * Delegates the calldata to the SDK's own MAS0AssetLogic.mint(). Hand-rolling
+ * the POLO encoding produces a plain struct where the runtime expects a
+ * document, and the node rejects it with "missing data for 'beneficiary'".
+ *
+ * Cannot be bundled into the create: the asset account does not exist until
+ * that interaction commits, so declaring it as a participant fails with
+ * "account not found". Minting is always a second interaction.
+ */
+export async function buildMint(
+  signer: unknown,
+  sender: SenderInfo,
+  params: { assetId: string; to: string; amount: bigint },
+  options: BuildOptions = {},
+): Promise<UnsignedInteraction> {
+  const { MAS0AssetLogic } = await import("js-moi-sdk");
+  const amount = params.amount <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(params.amount) : params.amount;
+
+  let payload: Record<string, unknown> | undefined;
+  try {
+    const logic = new MAS0AssetLogic(params.assetId, signer as never) as unknown as {
+      mint: (to: string, amt: number | bigint) => { ctx?: { payload?: Record<string, unknown> } };
+    };
+    payload = logic.mint(params.to, amount).ctx?.payload;
+  } catch (err) {
+    throw new MoiError(
+      ErrorCode.INVALID_ARGS,
+      `Could not build a mint for ${params.assetId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  if (!payload) {
+    throw new MoiError(ErrorCode.INVALID_ARGS, `Could not encode a mint for ${params.assetId}.`);
+  }
+
+  return {
+    ...base(sender, options),
+    ix_operations: [
+      {
+        type: OpType.ASSET_INVOKE,
+        payload: { ...payload, calldata: String(payload["calldata"] ?? "").replace(/^0x/, "") },
+      },
+    ],
+    // Matches MAS0AssetLogic.mint(): the asset and the beneficiary, both MUTATE.
+    participants: [
+      { id: params.assetId, lock_type: LockType.MUTATE_LOCK },
+      { id: params.to, lock_type: LockType.MUTATE_LOCK },
     ],
   };
 }

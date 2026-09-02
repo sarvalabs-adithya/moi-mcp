@@ -229,6 +229,19 @@ export const CreateAssetInput = z.object({
   isFungible: z.boolean().default(true),
 });
 
+/**
+ * Mint tokens of an asset you manage.
+ *
+ * Creating a MAS0 asset sets a max_supply CEILING and mints nothing —
+ * circulating supply starts at 0, so the creator holds none and the asset is
+ * invisible in a wallet until this is called.
+ */
+export const MintInput = z.object({
+  assetId: AssetId.describe("The asset to mint. You must be its manager."),
+  amount: WireAmount.describe("How many tokens to mint, scaled by the asset's dimension."),
+  to: HexId.optional().describe("Recipient. Defaults to the connected wallet."),
+});
+
 export const CallLogicInput = z.object({
   logicId: LogicId,
   routine: z.string().min(1),

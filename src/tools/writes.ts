@@ -18,6 +18,7 @@ import {
   assertSendable,
   buildCreateAsset,
   buildLogicInvoke,
+  buildMint,
   buildTransfer,
   encodeLogicCall,
   chooseStorageFund,
@@ -34,6 +35,7 @@ import {
   CallLogicViewOutput,
   CreateAssetInput,
   ErrorCode,
+  MintInput,
   TransferInput,
   WriteResult,
 } from "../schema.js";
@@ -267,9 +269,11 @@ export function registerWriteTools(server: McpServer): void {
     {
       title: "Create a MOI asset",
       description:
-        "Propose creating a new MOI native asset (a token). Sent to MOI Wallet for approval on " +
-        "your phone. `dimension` is the number of decimal places; `standard` is MAS0, MAS1, MAS2 " +
-        "or MASX.",
+        "Propose creating a new MOI native asset (a token). `supply` sets the MAXIMUM supply — " +
+        "it does not mint anything, so circulating supply starts at 0 and you will hold none " +
+        "until you call moi_mint. `dimension` is the number of decimal places; `standard` is " +
+        "MAS0, MAS1, MAS2 or MASX. Storage funding is handled automatically. Sent to MOI Wallet " +
+        "for approval on your phone.",
       inputSchema: CreateAssetInput.shape,
       outputSchema: WriteOutputShape,
       annotations: WRITE_ANNOTATIONS,
@@ -304,6 +308,59 @@ export function registerWriteTools(server: McpServer): void {
         );
 
         const hash = await signAndBroadcast(session, ix, `Create asset ${symbol} with supply ${supply}`);
+
+        return ok({
+          status: "sent",
+          hash,
+          explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
+        });
+      } catch (err) {
+        return ok(asWriteResult(err));
+      }
+    },
+  );
+
+  server.registerTool(
+    "moi_mint",
+    {
+      title: "Mint tokens of a MOI asset",
+      description:
+        "Mint tokens of an asset you manage, to yourself or another account. Creating an asset " +
+        "sets a maximum supply but mints nothing — until you mint, circulating supply is 0, you " +
+        "hold none, and the asset does not appear in a wallet. Sent to MOI Wallet for approval.",
+      inputSchema: MintInput.shape,
+      outputSchema: WriteOutputShape,
+      annotations: WRITE_ANNOTATIONS,
+    },
+    async ({ assetId, amount, to }) => {
+      try {
+        const cfg = getConfig();
+        const wc = walletClient();
+        const session = requireSession(await wc.currentSession(), cfg.MOI_NETWORK);
+
+        const asset = await getAsset(getProvider(providerOptions()), assetId);
+        const recipient = to ?? session.account;
+        const raw = parseAmount(amount, asset.dimension);
+
+        const ix = await withMeasuredFuel(
+          await buildMint(
+            getReadOnlySigner(providerOptions()),
+            await senderFor(session.account),
+            { assetId, to: recipient, amount: raw },
+          ),
+        );
+        assertSendable(ix);
+        await assertWillSucceed(
+          ix,
+          `Minting requires you to be the asset's manager, and the new total cannot exceed its ` +
+            `maximum supply.`,
+        );
+
+        const hash = await signAndBroadcast(
+          session,
+          ix,
+          `Mint ${amount} ${asset.symbol || assetId} to ${recipient}`,
+        );
 
         return ok({
           status: "sent",

@@ -22,7 +22,7 @@ through the WalletConnect relay. It is not a secret key.
 }
 ```
 
-Restart Claude. `moi` should appear in the tools list with 12 tools.
+Restart Claude. `moi` should appear in the tools list with 13 tools.
 
 **Cursor** — same block in `.cursor/mcp.json`. See `examples/cursor.mcp.json`.
 

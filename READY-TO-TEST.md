@@ -70,9 +70,9 @@ value to merge in, not the whole file:
 ```
 
 Quit Claude completely (Cmd-Q, not close window) and reopen. The tool picker
-should list 12 `moi` tools.
+should list 13 `moi` tools.
 
-12 tools show up even with a missing or wrong `WC_PROJECT_ID` — config loads
+13 tools show up even with a missing or wrong `WC_PROJECT_ID` — config loads
 lazily. The real gate is §5 check 1: `moi_wallet_status` must return
 `configOk: true`; if it returns false, its `configError` field names the cause.
 To diagnose, read `~/Library/Logs/Claude/mcp-server-moi.log` rather than running
@@ -90,6 +90,7 @@ Call the transfer prompt **T**:
 | 1 | `what's my MOI wallet status?` | — | `connected: true`, account `0x…1a46…`, `network: voyage`, `chainId: moi:14`, `configOk: true` |
 | 2 | **T** | **Approve** | `{"status":"sent","hash":"0x…","explorerUrl":…}`. Then `did that land?` → `status: success` |
 | 3 | `create an asset called MCPTEST with supply 1000` | **Approve** | `status: sent` + hash — the new asset id is **not** in the write result (only `{status, hash, explorerUrl}`). Get it from `did <hash> land?` and read the ASSET_CREATE operation's payload/receipt, or from the explorerUrl page. Then `look up asset <that id>` → symbol MCPTEST, MAS0 |
+| 3b | `mint 1000 of asset <the new id>` | **Approve** | `status: sent`; then `what's in my account?` shows the new asset, and it appears in MOI Wallet. Creating sets a max supply and mints nothing — until you mint, you hold none and the wallet shows nothing |
 | 4 | **T** | **Reject** | `{"status":"rejected","reason":"user_rejected"}` |
 | 5 | **T** | ignore it | After ~60 s the chat shows `MCP error -32001: Request timed out`. The server gives up first at `REQUEST_TIMEOUT_MS` (55000), just under the MCP client's own 60s `DEFAULT_REQUEST_TIMEOUT_MSEC`, so the approval dies with it. Pass = the request ends cleanly, a later tap does nothing, and `npm run status` still shows `connected: true` |
 | 6 | quit Claude Desktop, set `MOI_NETWORK` to `mainnet` in `claude_desktop_config.json`, reopen, then **T** | — | `reason: network_mismatch`; `what's in my account?` still answers. Set `MOI_NETWORK` back to `voyage` and reopen afterwards |
