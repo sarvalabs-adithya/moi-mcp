@@ -34,6 +34,39 @@ export const Amount = z.string().regex(/^\d+(\.\d+)?$/, "decimal string");
 
 export const InteractionHash = HexId;
 
+/**
+ * An amount as it arrives over the wire.
+ *
+ * Amounts are decimal STRINGS internally so that values beyond 2^53 survive,
+ * but an MCP client handed a numeric-looking field sends a JSON number — and
+ * a string-only schema then rejects it with no value able to satisfy both.
+ * Accept a number too, and normalise it to the canonical string.
+ *
+ * A number above Number.MAX_SAFE_INTEGER is refused rather than silently
+ * rounded; those callers must send a string.
+ */
+export const WireAmount = z
+  .union([Amount, z.number()])
+  .transform((value, ctx) => {
+    if (typeof value === "string") return value;
+    if (!Number.isFinite(value) || value < 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "amount must be a non-negative number" });
+      return z.NEVER;
+    }
+    if (!Number.isSafeInteger(value) && !Number.isInteger(value)) {
+      // A non-integer is fine (1.5); an unsafe integer is not.
+      return String(value);
+    }
+    if (!Number.isSafeInteger(value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `amount ${value} exceeds the safe integer range — pass it as a string to keep full precision`,
+      });
+      return z.NEVER;
+    }
+    return String(value);
+  });
+
 /** CAIP-2 chain id used in WalletConnect namespaces. CONFIRM VALUES. */
 export const CAIP2 = z.record(Network, z.string()).default({
   voyage: "moi:14",         // verified against MOI Wallet + sarvalabs/wallet-connect-dapp
@@ -176,20 +209,20 @@ export type WriteResult = z.infer<typeof WriteResult>;
 export const TransferInput = z.object({
   to: HexId,
   assetId: AssetId.describe("Native asset id. Use MOI asset id for gas token."),
-  amount: Amount,
+  amount: WireAmount,
   memo: z.string().max(140).optional(),
 });
 
 export const CreateAssetInput = z.object({
   symbol: z.string().min(1).max(12),
-  supply: Amount,
+  supply: WireAmount,
   /**
    * KMOI to fund the new asset with so it can pay its own storage. Omitted,
    * this defaults to 1,000,000 (js-moi-constants' DEFAULT_STORAGE_FUND).
    * Too little and the interaction fails; more than you hold and the funding
    * transfer fails.
    */
-  storageFund: Amount.optional(),
+  storageFund: WireAmount.optional(),
   dimension: z.number().int().min(0).max(18).default(0),
   standard: z.string().default("MAS0"),
   isStateful: z.boolean().default(false),

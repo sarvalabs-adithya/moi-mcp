@@ -436,3 +436,40 @@ describe("moi_call_logic", () => {
     );
   });
 });
+
+describe("amount inputs accept the JSON numbers clients actually send", () => {
+  /**
+   * Regression: `storageFund` and `supply` were string-only, so a client
+   * sending the number 50000 got "Expected string, received number" — and
+   * forcing a string tripped the decimal-string pattern. Nothing satisfied
+   * both, making the parameter unreachable through MCP.
+   */
+  it("moi_create_asset takes a numeric storageFund", async () => {
+    seedSession(h.home);
+    const res = await h.call("moi_create_asset", {
+      symbol: "NUMTEST", supply: 1000, storageFund: 50000,
+    });
+    expect(res.isError ?? false, res.text).toBe(false);
+    expect(res.structuredContent).toMatchObject({ status: "sent" });
+  });
+
+  it("produces the same interaction whether the amount is a number or a string", async () => {
+    seedSession(h.home);
+    await h.call("moi_create_asset", { symbol: "SAME", supply: 1000, storageFund: 50000 });
+    const asNumber = signedIx(0);
+
+    await h.call("moi_create_asset", { symbol: "SAME", supply: "1000", storageFund: "50000" });
+    const asString = signedIx(1);
+
+    expect(asNumber).toEqual(asString);
+  });
+
+  it("refuses an unsafe integer rather than silently rounding it", async () => {
+    seedSession(h.home);
+    // 2^53 + 1 cannot round-trip through a JSON number.
+    const res = await h.call("moi_transfer", {
+      to: OTHER, assetId: KMOI, amount: 9007199254740993,
+    });
+    expect(res.text).toMatch(/safe integer|string|Invalid/i);
+  });
+});

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildReadOnlyServer } from "../../src/http.js";
 import {
+  inlineLocalRefs,
   JSON_SCHEMA_2020_12,
   modernizeSchemaDialect,
 } from "../../src/json-schema-dialect.js";
@@ -50,6 +51,19 @@ describe("modernizeSchemaDialect", () => {
  * draft-07-only (tuple `items`, `dependencies`, `definitions` + `$ref`), this
  * fails instead of shipping a schema clients silently refuse.
  */
+let node: MockNode;
+let h: Harness;
+
+beforeAll(async () => {
+  node = await startMockNode();
+  h = await startHarness(node.url);
+});
+
+afterAll(async () => {
+  await h.close();
+  await node.close();
+});
+
 describe("every advertised schema is valid JSON Schema 2020-12", () => {
   const ajv = new Ajv2020({ strict: false });
   addFormats(ajv as never);
@@ -94,5 +108,70 @@ describe("every advertised schema is valid JSON Schema 2020-12", () => {
   it("http server: its tools compile too", () => {
     // Same registration path; guards the read-only transport separately.
     expect(() => buildReadOnlyServer()).not.toThrow();
+  });
+});
+
+
+describe("inlineLocalRefs", () => {
+  /**
+   * zod-to-json-schema collapses structurally identical sub-schemas into
+   * `$ref: "#/properties/…"`. A client that does not resolve JSON Pointers
+   * sees a bare `{}` and infers the type from the value — which is how
+   * `storageFund` became impossible to call: the client sent the number
+   * 50000 against an empty schema, and the validator demanded a decimal
+   * string. No value satisfied both.
+   */
+  it("replaces a pointer with the schema it targets", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        supply: { type: "string", pattern: "^\\d+$" },
+        storageFund: { $ref: "#/properties/supply" },
+      },
+    };
+    expect(inlineLocalRefs(schema)).toBe(1);
+    expect(schema.properties.storageFund).toEqual({ type: "string", pattern: "^\\d+$" });
+  });
+
+  it("keeps sibling keywords alongside the resolved target", () => {
+    const schema = {
+      properties: {
+        a: { type: "string" },
+        b: { $ref: "#/properties/a", description: "kept" },
+      },
+    };
+    inlineLocalRefs(schema);
+    expect(schema.properties.b).toEqual({ type: "string", description: "kept" });
+  });
+
+  it("leaves an unresolvable ref alone rather than guessing", () => {
+    const schema = { properties: { a: { $ref: "#/nope/missing" } } };
+    expect(inlineLocalRefs(schema)).toBe(0);
+    expect(schema.properties.a).toEqual({ $ref: "#/nope/missing" });
+  });
+
+  it("terminates on a self-referential schema", () => {
+    const schema: Record<string, unknown> = { properties: {} };
+    (schema["properties"] as Record<string, unknown>)["self"] = { $ref: "#" };
+    expect(() => inlineLocalRefs(schema)).not.toThrow();
+  });
+
+  it("no advertised schema still contains a $ref", async () => {
+    const { tools } = await h.client.listTools();
+    const withRefs = tools.filter((t) =>
+      JSON.stringify([t.inputSchema, t.outputSchema]).includes('"$ref"'),
+    );
+    expect(withRefs.map((t) => t.name)).toEqual([]);
+  });
+
+  it("storageFund advertises a usable type, not an empty schema", async () => {
+    const { tools } = await h.client.listTools();
+    const create = tools.find((t) => t.name === "moi_create_asset")!;
+    const field = (create.inputSchema as { properties: Record<string, unknown> }).properties[
+      "storageFund"
+    ] as Record<string, unknown>;
+    // Must describe SOMETHING — an empty schema is what made it uncallable.
+    expect(Object.keys(field).length).toBeGreaterThan(0);
+    expect(JSON.stringify(field)).toMatch(/string|number/);
   });
 });
