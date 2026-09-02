@@ -17,6 +17,30 @@ installed code; anything inferred is marked.
 
 ---
 
+## STATUS — 2026-09-02
+
+The plan below predates the build. Where we actually are:
+
+- **DONE — the trunk** (merged to master, 275 tests green): OAuth 2.1 AS
+  (RFC 8414/9728/7591, PKCE S256-only, scope enforcement with 403 step-up),
+  the hosted entry `moi-mcp-hosted` (`src/server.ts`, lazy-auth 401 gate,
+  reads public), the one-time QR pairing page (`src/pairing/`), the per-user
+  session store (`src/wc/store.ts`), the write journal (`src/journal.ts`).
+  M2/M3/M4-page/M5-journal are therefore largely done; what remains of them
+  is live verification against real claude.ai.
+- **DONE — packaging**: default `mcp-server` bin fixed, MCPB one-click
+  bundle (`npm run bundle:mcpb`, ~24 MB), stranger-proof docs with verified
+  faucet/wallet/community links, `docs/deploy-vm.md` runbook.
+- **NEXT — branch A (per-tap writes hosted)**: per-user WC hub/demux
+  (`src/wc/hub.ts`) + wiring the four write tools through the caller's
+  session. **Branch B (mandates)**: cap+expiry engine at the same signer
+  seam. Build whichever spike proves out first; the trunk serves both.
+- **NEEDS A HUMAN**: spike A (two pairings, one phone), the mandate spike
+  (one Approve tap), claude.ai add-connector test loops, VM SSH + hostname,
+  npm scope decision, mcp-review email.
+
+---
+
 ## 0. Decide before starting
 
 | Decision | Options | Recommendation |
