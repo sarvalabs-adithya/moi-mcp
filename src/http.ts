@@ -25,6 +25,7 @@ import { z } from "zod";
 
 import { getConfig, log } from "./config.js";
 import { messageOf } from "./errors.js";
+import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { NETWORKS } from "./moi/provider.js";
 import { registerResources } from "./resources/index.js";
 import { registerReadTools } from "./tools/reads.js";
@@ -125,7 +126,9 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   // Stateless: a fresh server and transport per request, so concurrent callers
   // can never observe each other's state. There is none to share.
   const server = buildReadOnlyServer();
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const transport = withModernSchemaDialect(
+    new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }),
+  );
 
   res.on("close", () => {
     void transport.close();

@@ -14,6 +14,7 @@ import { z } from "zod";
 
 import { getConfig, log, projectIdIssue } from "./config.js";
 import { messageOf } from "./errors.js";
+import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { registerResources } from "./resources/index.js";
 import { registerReadTools } from "./tools/reads.js";
 import { registerWalletTools } from "./tools/wallet.js";
@@ -97,7 +98,7 @@ async function main(): Promise<void> {
   registerWriteTools(server);
   registerResources(server);
 
-  await server.connect(new StdioServerTransport());
+  await server.connect(withModernSchemaDialect(new StdioServerTransport()));
   log("info", `${pkg.name}@${pkg.version} ready on stdio`);
 }
 

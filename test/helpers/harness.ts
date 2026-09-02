@@ -21,6 +21,7 @@ import { registerResources } from "../../src/resources/index.js";
 import { registerReadTools } from "../../src/tools/reads.js";
 import { registerWalletTools, resetWalletClient, setWalletClient } from "../../src/tools/wallet.js";
 import { registerWriteTools } from "../../src/tools/writes.js";
+import { withModernSchemaDialect } from "../../src/json-schema-dialect.js";
 import type { SignClientLike, WcConfig } from "../../src/wc/client.js";
 import { saveSession, type Session } from "../../src/wc/session.js";
 import { ACCOUNT } from "./mock-node.js";
@@ -130,7 +131,9 @@ export async function startHarness(
   const server = buildServer();
   const client = new Client({ name: "harness", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await server.connect(serverTransport);
+  // Wrap exactly as src/index.ts and src/http.ts do, so tests exercise the
+  // schemas clients actually receive — the SDK stamps draft-07 otherwise.
+  await server.connect(withModernSchemaDialect(serverTransport));
   await client.connect(clientTransport);
   // Caches every tool's outputSchema so callTool validates structuredContent
   // client-side too — the layer the write-tool regression slipped past.
