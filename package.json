@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "MCP server for the MOI network. Agents read chain state and propose transactions; signing happens on your phone via MOI Wallet. The server holds zero private keys.",
   "license": "MIT",
+  "author": "Adithya Ganesh",
   "type": "module",
   "engines": {
     "node": ">=20"
