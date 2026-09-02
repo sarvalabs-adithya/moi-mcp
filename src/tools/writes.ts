@@ -30,6 +30,7 @@ import {
 } from "../moi/ix-builder.js";
 import { getProvider, getReadOnlySigner, interactionUrl } from "../moi/provider.js";
 import { getAccount, getAsset, toBigInt } from "../moi/reads.js";
+import { PhoneSigner, signAndBroadcast as signingSignAndBroadcast } from "../signing/index.js";
 import {
   CallLogicInput,
   CallLogicViewOutput,
@@ -39,7 +40,7 @@ import {
   TransferInput,
   WriteResult,
 } from "../schema.js";
-import { requireSession } from "../wc/session.js";
+import { requireSession, type Session } from "../wc/session.js";
 import { walletClient } from "./wallet.js";
 
 type Write = z.infer<typeof WriteResult>;
@@ -58,7 +59,7 @@ type Write = z.infer<typeof WriteResult>;
  * burns fuel and fails — the worst outcome, because it looks like their
  * approval caused the failure.
  */
-async function assertWillSucceed(ix: UnsignedInteraction, hint?: string): Promise<void> {
+export async function assertWillSucceed(ix: UnsignedInteraction, hint?: string): Promise<void> {
   const provider = getProvider(providerOptions()) as unknown as { call: (i: unknown) => Promise<unknown> };
   const result = await simulate(provider, ix);
   if (result.ok) return;
@@ -106,7 +107,7 @@ function providerOptions() {
  * return that field), which silently becomes 0 and the wallet rejects the
  * interaction with "invalid nonce".
  */
-async function senderFor(account: string, keyId = 0): Promise<SenderInfo> {
+export async function senderFor(account: string, keyId = 0): Promise<SenderInfo> {
   const provider = getProvider(providerOptions()) as unknown as {
     getPendingInteractionCount: (id: string, keyId: number) => Promise<number | bigint>;
   };
@@ -163,31 +164,21 @@ const WriteOutputShape = {
  * the wallet's combined sendInteractions is broken (see wc/client.ts). It also
  * keeps the zero-key property: the signature is produced on the phone and this
  * process only relays it to the node.
+ *
+ * This is a thin wrapper around the generalized signAndBroadcast in the signing
+ * module, so that module 3 (MandateSigner) can later be dropped into the same
+ * call site without duplicating the sign→broadcast→error-translation logic.
  */
 async function signAndBroadcast(
-  session: Parameters<typeof requireSession>[0] extends undefined ? never : NonNullable<ReturnType<typeof requireSession>>,
+  session: Session,
   ix: UnsignedInteraction,
   description: string,
 ): Promise<string> {
-  const signed = await walletClient().signInteraction(session, ix, { description });
-
+  const signer = new PhoneSigner(walletClient(), session);
   const provider = getProvider(providerOptions()) as unknown as {
     sendInteraction: (req: { ix_args: string; signatures: string }) => Promise<{ hash: string }>;
   };
-  try {
-    const response = await provider.sendInteraction(signed);
-    const hash = response?.hash;
-    if (typeof hash !== "string" || !/^0x[0-9a-fA-F]+$/.test(hash)) {
-      throw new MoiError(ErrorCode.RPC_ERROR, `Node accepted the interaction but returned no hash.`);
-    }
-    return hash;
-  } catch (err) {
-    if (err instanceof MoiError) throw err;
-    throw new MoiError(
-      ErrorCode.RPC_ERROR,
-      `You approved the interaction but broadcasting it failed: ${err instanceof Error ? err.message.slice(0, 180) : String(err)}`,
-    );
-  }
+  return signingSignAndBroadcast(signer, provider, ix, description);
 }
 
 function ok(value: Write) {
