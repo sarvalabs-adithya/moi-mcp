@@ -126,7 +126,15 @@ export function createPairingModule(now: () => number = Date.now): PairingModule
       rec.uri = uri;
     }
 
-    const svg = await QRCode.toString(uri, { type: "svg", margin: 1, width: 240 });
+    let svg: string;
+    try {
+      svg = await QRCode.toString(uri, { type: "svg", margin: 1, width: 240 });
+    } catch {
+      // Same rule as the resolveUri failure above: never surface the raw
+      // error here either.
+      res.status(500).type("html").send(errorHtml());
+      return;
+    }
     res.status(200).type("html").send(pairingHtml(uri, svg, expirySeconds(rec)));
   }
 
