@@ -26,6 +26,15 @@ const JSONRPC_FOR: Record<ErrorCode, number> = {
   [ErrorCode.REQUEST_TIMEOUT]: JsonRpcErrorCode.RequestTimeout,
   [ErrorCode.RPC_ERROR]: JsonRpcErrorCode.InternalError,
   [ErrorCode.RELAY_UNAVAILABLE]: JsonRpcErrorCode.InternalError,
+
+  // Mandate (delegated-authority) state — valid arguments, wrong ledger state.
+  [ErrorCode.MANDATE_NOT_FOUND]: JsonRpcErrorCode.InvalidRequest,
+  [ErrorCode.MANDATE_EXPIRED]: JsonRpcErrorCode.InvalidRequest,
+  [ErrorCode.MANDATE_EXCEEDED]: JsonRpcErrorCode.InvalidRequest,
+
+  // Server misconfiguration and rejected credentials.
+  [ErrorCode.CONFIGURATION_ERROR]: JsonRpcErrorCode.InternalError,
+  [ErrorCode.UNAUTHORIZED]: JsonRpcErrorCode.InvalidRequest,
 };
 
 /** Build an McpError carrying the MOI string code in `data.code`. */

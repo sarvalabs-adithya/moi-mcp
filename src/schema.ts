@@ -479,6 +479,11 @@ export const ErrorCode = {
   AGENT_NOT_FOUND: "AGENT_NOT_FOUND",
   LOGIC_ROUTINE_NOT_FOUND: "LOGIC_ROUTINE_NOT_FOUND",
   RELAY_UNAVAILABLE: "RELAY_UNAVAILABLE",
+  MANDATE_NOT_FOUND: "MANDATE_NOT_FOUND",
+  MANDATE_EXPIRED: "MANDATE_EXPIRED",
+  MANDATE_EXCEEDED: "MANDATE_EXCEEDED",
+  CONFIGURATION_ERROR: "CONFIGURATION_ERROR", // required server config (e.g. env var) missing
+  UNAUTHORIZED: "UNAUTHORIZED",               // caller-supplied credential rejected (e.g. bad keystore password)
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 
