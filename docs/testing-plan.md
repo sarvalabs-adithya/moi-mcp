@@ -11,7 +11,7 @@ failures in this project were not catchable at the tier below.
 
 ---
 
-## Tier 1 — unit (168 tests, hermetic; 5 more skip unless `MOI_E2E=1`)
+## Tier 1 — unit (169 tests, hermetic; 5 more skip unless `MOI_E2E=1`)
 
 ```bash
 npm test          # TypeScript — 13 files, ~1.5 s
@@ -164,6 +164,7 @@ npm pack && (cd $(mktemp -d) && npm init -y >/dev/null \
 
 Install from the tarball, not the source tree. That is what caught `js-polo`
 being a phantom dependency, and what caught the `moi-mcp-http` bin exiting
-silently (it does, in 0.1.0 as packed — fix before tagging).
+silently through the npm bin symlink — fixed in 10f2ce1 by comparing realpaths,
+and now asserted in CI against the packed tarball.
 
 Then Tier 3 checks 1–3 by hand. Do not ship a write path nobody has approved.

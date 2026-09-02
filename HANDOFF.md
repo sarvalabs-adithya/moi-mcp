@@ -2,8 +2,8 @@
 
 State as of 2026-09-01. Two repos: `~/moi-mcp` (TypeScript, stdio + read-only
 HTTP, wallet writes) and `~/moi-mcp-go` (Go, read-only, stdio + stateless
-HTTP). Nothing is published to npm; nothing is committed from today's session
-(see "Uncommitted" below).
+HTTP). Nothing is published to npm. Everything from this session is committed;
+the working tree is clean at 484e114.
 
 **Tomorrow morning: follow `READY-TO-TEST.md` top to bottom.** It is the
 ordered checklist with exact commands.
@@ -12,7 +12,7 @@ ordered checklist with exact commands.
 
 | Area | Status | Evidence |
 |---|---|---|
-| Unit tests | 168 pass, 5 skipped (the `MOI_E2E`-gated live tests) | `npm test`, 1.5 s |
+| Unit tests | 169 pass, 5 skipped (the `MOI_E2E`-gated live tests) | `npm test`, 1.5 s |
 | Typecheck, build, pack | clean; tarball 30 files, 183 kB | fresh-install run from the packed tarball |
 | stdio server | 12 tools, 2 resources, stdout 100 % JSON, stderr empty at `LOG_LEVEL=error` | JSON-RPC sweep, unpaired and paired |
 | Reads on devnet | nonce 5, 95699 KMOI, KMOI/MAS0/supply 90000000100000, interaction `0x3c5682…` success/299 fuel | `npm run test:e2e`, `npm run cross-check` |
@@ -94,19 +94,13 @@ against live devnet.
   (`Approve`/`TransferFrom`/`Revoke`, amount + expiry). Only mandates carry a
   budget. `docs/findings.md` §6 has the full picture and what a
   `moi_transfer_from` tool would need.
-
-## Uncommitted
-
-`~/moi-mcp`: `package.json` (`cross-check` script), `scripts/cross-check.mjs`,
-`test/helpers/{harness,mock-node}.ts`, `test/unit/{tools-reads,tools-wallet,
-tools-writes,resources}.test.ts`, and every doc touched today.
-`~/moi-mcp-go`: `internal/moirpc/live_test.go`. `go.mod` lists direct deps as
-`// indirect` — `go mod tidy` when convenient.
+- `~/moi-mcp-go/go.mod` lists direct deps as `// indirect` — `go mod tidy` when
+  convenient.
 
 ## Commands
 
 ```bash
-cd ~/moi-mcp && npm test && npm run typecheck && npm run build   # 168 tests
+cd ~/moi-mcp && npm test && npm run typecheck && npm run build   # 169 tests
 npm run test:e2e                # live devnet reads
 npm run cross-check             # TS vs Go, 10 fields
 npm run status                  # wallet session; npm run pair if not connected

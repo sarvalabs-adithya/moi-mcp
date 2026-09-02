@@ -8,6 +8,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,9 +61,16 @@ const MANAGED_ENV = [
 let savedEnv: Record<string, string | undefined> | undefined;
 
 /**
- * Point the server at the mock node. Values are set explicitly for every key
- * config reads, so a developer's .env (which dotenv only uses for UNSET keys)
- * cannot leak into a test.
+ * Point the server at the mock node.
+ *
+ * DELETING a key is not enough to isolate a test: loadConfig() re-runs dotenv
+ * against the repo's real `.env` on every resetConfigCache, and dotenv fills in
+ * exactly the keys that are UNSET. So every key any src file reads out of
+ * process.env is SET here — including the two that never pass through
+ * config.ts: MOI_WC_PARAM_STYLE (src/wc/client.ts paramStyle) and
+ * MOI_READ_CALLER (src/moi/provider.ts getReadOnlySigner). Leaving either
+ * merely deleted lets a developer's .env change the wallet payload encoding or
+ * the read caller under test.
  */
 export function applyEnv(rpcUrl: string, home: string, overrides: Record<string, string> = {}): void {
   savedEnv ??= Object.fromEntries(MANAGED_ENV.map((k) => [k, process.env[k]]));
@@ -76,6 +84,8 @@ export function applyEnv(rpcUrl: string, home: string, overrides: Record<string,
     LOG_LEVEL: "silent",
     MOI_EXPLORER_URL: "https://voyage.moi.technology",
     MOI_AGENT_REGISTRY_LOGIC_ID: DEFAULT_REGISTRY_LOGIC_ID,
+    MOI_WC_PARAM_STYLE: "positional",
+    MOI_READ_CALLER: ACCOUNT,
     ...overrides,
   });
   resetConfigCache();
@@ -162,11 +172,29 @@ export interface FakeWallet {
   client: SignClientLike;
   request: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
+  /**
+   * The SignClient factory installWallet hands to WalletConnectClient. Spying
+   * on it is how a test proves a code path never CONSTRUCTS a wallet client —
+   * `request` not being called is weaker, because construction alone opens a
+   * relay connection and a wc.db in production.
+   */
+  factory: ReturnType<typeof vi.fn>;
   /** Every request the "phone" received, in order. */
   requests: WcRequest[];
 }
 
-export const SIGNED = { ix_args: "0e5f0300", signatures: "0e1f03deadbeef" };
+/**
+ * What the fake phone returns for a given interaction.
+ *
+ * Deliberately DERIVED from the request rather than constant: the write path's
+ * contract is "the bytes the phone signed are the bytes the node receives",
+ * and a constant reply makes that assertion true no matter what
+ * signAndBroadcast forwards.
+ */
+export function signatureFor(req: WcRequest): { ix_args: string; signatures: string } {
+  const digest = createHash("sha256").update(JSON.stringify(req.request.params[0])).digest("hex");
+  return { ix_args: `0e5f0300${digest.slice(0, 32)}`, signatures: `0e1f03${digest.slice(32, 64)}` };
+}
 
 /**
  * Stand in for the SignClient + phone. `respond` decides what the wallet
@@ -174,7 +202,7 @@ export const SIGNED = { ix_args: "0e5f0300", signatures: "0e1f03deadbeef" };
  * rejection on the phone.
  */
 export function fakeWallet(
-  respond: (req: WcRequest) => unknown = () => SIGNED,
+  respond: (req: WcRequest) => unknown = signatureFor,
 ): FakeWallet {
   const requests: WcRequest[] = [];
   const request = vi.fn(async (args: unknown) => {
@@ -193,7 +221,8 @@ export function fakeWallet(
     on: vi.fn(),
     session: { keys: [], get: () => undefined },
   };
-  return { client, request, disconnect, requests };
+  const factory = vi.fn(async () => client);
+  return { client, request, disconnect, factory, requests };
 }
 
 /** Install a fake wallet on the tool layer for the current config. */
@@ -206,7 +235,7 @@ export function installWallet(home: string, wallet: FakeWallet, cfg: Partial<WcC
       requestTimeoutMs: 2000,
       ...cfg,
     },
-    async () => wallet.client,
+    wallet.factory as unknown as (c: WcConfig) => Promise<SignClientLike>,
   );
 }
 

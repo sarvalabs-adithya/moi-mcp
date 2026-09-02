@@ -20,7 +20,7 @@ import {
   fakeWallet,
   installWallet,
   seedSession,
-  SIGNED,
+  signatureFor,
   startHarness,
   type FakeWallet,
   type Harness,
@@ -56,6 +56,24 @@ function signedIx(index = 0): Record<string, unknown> {
   expect(req!.request.params).toHaveLength(1);
   assertJsonSafe(req!.request.params[0]);
   return req!.request.params[0] as Record<string, unknown>;
+}
+
+type Op = { type: number; payload: Record<string, unknown> };
+
+function opsOf(ix: Record<string, unknown>): Op[] {
+  return ix["ix_operations"] as Op[];
+}
+
+/**
+ * The operations the node was asked to DRY-RUN, from the `moi.Call` the
+ * simulation guard made. The SDK sends `{ ix_args: toInteractionArgs(ix) }`,
+ * so the operations arrive with their payloads POLO-encoded to hex.
+ */
+function simulatedOps(): Array<{ type: number; payload: string }> {
+  const call = node.calls.find((c) => c.method === "moi.Call");
+  expect(call, "expected a moi.Call simulation").toBeDefined();
+  const args = call!.params["ix_args"] as { ix_operations: Array<{ type: number; payload: string }> };
+  return args.ix_operations;
 }
 
 describe("guard order", () => {
@@ -100,6 +118,9 @@ describe("guard order", () => {
 
     const result = await h.call("moi_transfer", TRANSFER);
     expect(result.isError).toBe(true);
+    // The [CODE] token is the ONLY machine-readable code an agent sees: the
+    // SDK's tools/call wrapper drops McpError.data (src/errors.ts).
+    expect(result.text).toMatch(/^MCP error -32600: \[INSUFFICIENT_BALANCE\] /);
     expect(result.text).toMatch(/holds 5 of KMOI .* needs 10/);
     expect(wallet.request).not.toHaveBeenCalled();
     // The balance check is the last read; nothing is built, estimated or simulated.
@@ -157,15 +178,46 @@ describe("moi_transfer success path", () => {
       fuel_price: 1,
       fuel_limit: Math.ceil(299 * 1.5),
     });
-    const ops = ix["ix_operations"] as Array<{ type: number; payload: Record<string, unknown> }>;
+    const ops = opsOf(ix);
     expect(ops).toHaveLength(1);
     expect(ops[0]!.type).toBe(5); // ASSET_INVOKE
     expect(ops[0]!.payload["asset_id"]).toBe(KMOI);
     expect(String(ops[0]!.payload["calldata"])).not.toMatch(/^0x/);
 
-    // What the phone signed is exactly what the node received.
+    // HOW MUCH, and TO WHOM. Both are what the human approves on the phone,
+    // and without pinning them the tool could move any amount to any account
+    // with the suite still green.
+    //
+    // The participant list the phone receives is NOT the one buildTransfer
+    // produced ([recipient, asset]): js-moi-providers normalises the
+    // interaction in place during estimateFuel/call, so the sender leads and
+    // the recipient trails. Pinned as-is, because this is the list the wallet
+    // renders — a change here changes what the user is agreeing to.
+    expect(ix["participants"]).toEqual([
+      { id: ACCOUNT, lock_type: 0 }, // sender, added by the SDK
+      { id: KMOI, lock_type: 2 }, // the asset, MUTATE_LOCK
+      { id: OTHER, lock_type: 0 }, // the recipient
+    ]);
+    // The amount and the beneficiary both live inside the MAS0 calldata:
+    // `…"amount" 03 0a "beneficiary" 06 <id>`. Amount 20 would read `0314`.
+    expect(ops[0]!.payload["calldata"]).toBe(
+      "0d6f06658601b502616d6f756e74030a62656e6566696369617279 06".replace(/ /g, "") +
+        OTHER.slice(2),
+    );
+
+    // The interaction that was SIMULATED is the interaction that was SIGNED.
+    // Without this, assertWillSucceed could dry-run something else entirely
+    // and still wave through whatever the phone is asked to approve.
+    const simulated = simulatedOps();
+    expect(simulated).toHaveLength(ops.length);
+    expect(simulated.map((o) => o.type)).toEqual(ops.map((o) => o.type));
+    expect(simulated[0]!.payload).toContain(String(ops[0]!.payload["calldata"]));
+
+    // What the phone signed is exactly what the node received. The fake's
+    // reply is derived from the interaction it was handed, so this is a real
+    // comparison rather than two references to one constant.
     const send = node.calls.find((c) => c.method === "moi.SendInteractions");
-    expect(send?.params).toEqual(SIGNED);
+    expect(send?.params).toEqual(signatureFor(req));
 
     // Order: reads → nonce → estimate → simulate → (phone) → broadcast.
     const methods = node.methods();
@@ -285,10 +337,8 @@ describe("moi_create_asset", () => {
     const b = await h.call("moi_create_asset", { ...CREATE, storageFund: "20000" });
     expect(b.structuredContent).toMatchObject({ status: "sent", hash: SENT_HASH });
 
-    const first = signedIx(0);
-    const second = signedIx(1);
-    const opsA = first["ix_operations"] as Array<{ type: number; payload: Record<string, unknown> }>;
-    const opsB = second["ix_operations"] as Array<{ type: number; payload: Record<string, unknown> }>;
+    const opsA = opsOf(signedIx(0));
+    const opsB = opsOf(signedIx(1));
     expect(opsA.map((o) => o.type)).toEqual([4, 5]); // ASSET_CREATE, ASSET_INVOKE
     expect(opsA[0]!.payload).toMatchObject({
       symbol: "TST",
@@ -298,9 +348,23 @@ describe("moi_create_asset", () => {
       manager: ACCOUNT,
     });
     expect(opsA[1]!.payload["asset_id"]).toBe(KMOI);
-    // Same create, different fund → different funding calldata.
-    expect(opsA[0]!.payload["calldata"]).toEqual(opsB[0]!.payload["calldata"]);
+    // Same create, different fund → identical create leg, different funding
+    // calldata. (ASSET_CREATE carries no calldata at all, so compare the whole
+    // payload rather than a field that is undefined on both sides.)
+    expect(opsA[0]!.payload).toEqual(opsB[0]!.payload);
     expect(opsA[1]!.payload["calldata"]).not.toEqual(opsB[1]!.payload["calldata"]);
+
+    // storageFund is KMOI, and KMOI's dimension is 0 — it must NOT be scaled
+    // by the dimension of the asset being created. Same fund, dimension 6:
+    // the funding leg has to come out byte-identical. Scaling it there would
+    // over-fund by 10^dimension, and the inequality above would still hold.
+    const c = await h.call("moi_create_asset", { ...CREATE, dimension: 6, storageFund: "5000" });
+    expect(c.structuredContent).toMatchObject({ status: "sent" });
+    const opsC = opsOf(signedIx(2));
+    expect(opsC[1]!.payload["calldata"]).toEqual(opsA[1]!.payload["calldata"]);
+    // Guard the guard: the CREATE leg really does change with the dimension,
+    // so the equality above compares two genuinely different interactions.
+    expect(opsC[0]!.payload).toMatchObject({ dimension: 6, max_supply: 1_000_000_000 });
   });
 
   it("default storageFund with a node that reports insufficient → refused locally with the hint", async () => {
@@ -336,6 +400,11 @@ describe("moi_call_logic", () => {
       outputs: { output: null, error: null },
     });
     expect(wallet.request).not.toHaveBeenCalled();
+    // REGRESSION: the view path must not even CONSTRUCT the wallet client.
+    // `request` staying unused is too weak — currentSession() with no session
+    // on disk falls through to init() -> the SignClient factory, which in
+    // production opens a relay connection and wc.db for a plain read.
+    expect(wallet.factory).not.toHaveBeenCalled();
     expect(node.methods()).toEqual(expect.arrayContaining(["moi.LogicManifest", "moi.Call"]));
     expect(node.methods()).not.toContain("moi.SendInteractions");
   });
@@ -361,8 +430,9 @@ describe("moi_call_logic", () => {
     expect(result.structuredContent).toMatchObject({ status: "sent", hash: SENT_HASH });
 
     const ix = signedIx();
-    const ops = ix["ix_operations"] as Array<{ type: number; payload: Record<string, unknown> }>;
-    expect(ops).toEqual([{ type: 12, payload: { logic_id: LOGIC, callsite: "Ping" } }]);
-    expect(node.calls.find((c) => c.method === "moi.SendInteractions")?.params).toEqual(SIGNED);
+    expect(opsOf(ix)).toEqual([{ type: 12, payload: { logic_id: LOGIC, callsite: "Ping" } }]);
+    expect(node.calls.find((c) => c.method === "moi.SendInteractions")?.params).toEqual(
+      signatureFor(wallet.requests[0]!),
+    );
   });
 });

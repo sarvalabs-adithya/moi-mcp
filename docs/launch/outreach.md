@@ -41,7 +41,9 @@ Keep it under 120 words. Lead with the constraint, not the chain.
 2. Why a key in an env var is the wrong default (3 min)
 3. Live: install, pair, read, pay, approve on the phone (8 min)
 4. What's under it: interactions, participants, the registry (5 min)
-5. What's unsolved: unattended spending, session keys (2 min)
+5. What's unsolved *here*: unattended spending — MOI has MAS0 mandates
+   (`Approve`/`TransferFrom`/`Revoke`); this server does not build them yet
+   (2 min)
 
 ## Metrics — track from day 0
 

@@ -58,9 +58,24 @@ describe("moi_get_account", () => {
   it("rejects a malformed id as an INVALID_ARGS tool error, not a crash", async () => {
     const result = await h.call("moi_get_account", { address: "0xdeadbeef" });
     expect(result.isError).toBe(true);
+    // The leading [CODE] token is the contract, not decoration: SDK 1.30's
+    // tools/call wrapper collapses a thrown McpError to {isError, text} and
+    // drops `data`, so this token is the only machine-readable code an agent
+    // ever sees (src/errors.ts mcpError).
+    expect(result.text).toMatch(/^MCP error -32602: \[INVALID_ARGS\] /);
     expect(result.text).toMatch(/not a valid MOI participant id: 0xdeadbeef/i);
     // The bad id must be stopped at the first read; nothing else is attempted.
     expect(node.methods()).toEqual(["moi.AccountState"]);
+  });
+
+  it("tags an upstream node failure with the RPC_ERROR token", async () => {
+    node.on("moi.AccountState", () => {
+      throw new Error("node is having a bad day");
+    });
+    const result = await h.call("moi_get_account", { address: ACCOUNT });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/^MCP error -32603: \[RPC_ERROR\] /);
+    // No manual restore needed: node.reset() in beforeEach drops overrides.
   });
 
   it("refuses input that fails the zod schema before touching the node", async () => {
@@ -130,7 +145,6 @@ describe("moi_get_interaction", () => {
     const result = await h.call("moi_get_interaction", { hash: IX_HASH });
     expect(result.structuredContent?.["status"]).toBe("pending");
     expect(result.structuredContent?.["fuelUsed"]).toBeUndefined();
-    node.on("moi.InteractionReceipt", () => ({ from: ACCOUNT, status: 0, fuel_used: "0x12b", ix_operations: [] }));
   });
 });
 
@@ -145,11 +159,11 @@ describe("moi_get_logic", () => {
     });
   });
 
-  // KNOWN BUG: src/moi/reads.ts getLogic() keeps elements whose kind is
-  // "routine", but the manifest format names routines "callable"
+  // REGRESSION (fixed in 10f2ce1): getLogic() used to keep elements whose kind
+  // was "routine", but the manifest format names them "callable"
   // (js-moi-utils ElementType.ROUTINE === "callable"; the SDK's own
-  // LogicDriver filters on "callable"). Every real logic therefore reports
-  // zero routines. Flip this to `it` when reads.ts is fixed.
+  // LogicDriver filters on "callable" too), so every real logic reported zero
+  // routines. Reverting that filter must fail here.
   it("lists the manifest's callable routines", async () => {
     const result = await h.call("moi_get_logic", { logicId: LOGIC });
     expect(result.structuredContent?.["routines"]).toEqual([

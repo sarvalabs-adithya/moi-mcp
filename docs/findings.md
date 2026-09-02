@@ -158,6 +158,70 @@ live on devnet today. Exposing them would need three new tools; see §6.
 
 ---
 
+## 6. MOI already has amount- and expiry-bounded delegation; access policies are not it
+
+The obvious place to look for "let an agent spend up to X" is the access-policy
+machinery, because it is the thing named like a permission system. That is the
+wrong place, and the difference is worth stating precisely — this server does
+not ship the tools yet, but the primitive is not missing from MOI.
+
+**Mandates are the delegation primitive, and they carry a budget.**
+`js-moi-asset/src.ts/mas0.ts:53-57` declares
+
+```ts
+export interface Approve {
+    beneficiary: Uint8Array;
+    amount: number | bigint;
+    expires_at: number;
+}
+```
+
+`TransferFrom` (the `MAS0.Endpoint.TRANSFERFROM` member at `mas0.ts:4`, shaped
+at `mas0.ts:32-36` as `{ benefactor, beneficiary, amount }`) and `Revoke`
+(`mas0.ts:11`) close the loop: the owner **Approves** a beneficiary for an
+`amount` until an `expires_at`, the agent signs **TransferFrom** with its own
+key, and the owner can **Revoke** at any time. The cap is per asset, bounded by
+amount *and* by expiry, and it is live on devnet today.
+
+**Access policies are storage-only and have no amount field.**
+`js-moi-utils/lib.esm/schema.js:202-232` gives `accessPolicySchema` as exactly
+
+```
+{ resource, resource_id, actions, scope { prefixes, predicate(null) } }
+```
+
+— `resource` and `actions` are integers, `resource_id` and the scope prefixes
+are bytes, and `predicate` is a reserved nil slot that must still be encoded so
+later fields do not misalign. There is no amount anywhere in it, and no expiry.
+A policy can say *which keys of which resource may be written*; it cannot say
+*how much may be spent*.
+
+**And only one resource type is live.** `js-moi-utils/lib.esm/enums.js:44-50`
+defines `ResourceType` as `STORAGE(1)`, `ASSET(2)`, `LOGIC(3)`, `KEY(4)`, and
+the comment immediately above it states that only `STORAGE` is implemented on
+the network today — `ASSET`/`LOGIC`/`KEY` are reserved values that validate
+locally and are rejected server-side. So even the resource types that sound
+like spending controls do not exist on chain yet.
+
+**What §5 is pointing at, then**, is three new write tools plus one read:
+
+| Tool | Operation |
+|---|---|
+| `moi_approve` | MAS0 `Approve{beneficiary, amount, expires_at}` |
+| `moi_transfer_from` | MAS0 `TransferFrom{benefactor, beneficiary, amount}` |
+| `moi_revoke` | MAS0 `Revoke` |
+| a `moi.Mandates` read | show the caller what is currently delegated |
+
+Not anything built on `ACCESS_CREATE`/`ACCESS_UPDATE`/`ACCESS_DELETE`
+(`js-moi-utils` `enums.js` `OpType` 18/19/20), which cannot express a budget.
+Do not invent an `amount` or `expires_at` field on `AccessPolicy`: it has
+neither.
+
+The honest limit of mandates is that one mandate is a single cap per asset —
+no per-transaction limit, no rate. Richer policy than that still needs a Logic.
+
+---
+
 ## Summary for the protocol team
 
 | Finding | Ours to fix | Theirs to fix |

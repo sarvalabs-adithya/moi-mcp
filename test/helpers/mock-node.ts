@@ -82,10 +82,11 @@ export interface MockNode {
   url: string;
   calls: RpcCall[];
   state: NodeState;
-  /** Override or add a method handler for one test. */
+  /** Override or add a method handler for one test. `reset()` undoes it. */
   on(method: string, handler: Handler): void;
   /** Methods called, in order. */
   methods(): string[];
+  /** Forget recorded calls AND drop every `on()` override. */
   reset(): void;
   close(): Promise<void>;
 }
@@ -102,30 +103,62 @@ function requireId(value: unknown): string {
   return value;
 }
 
+/**
+ * The real node rejects a tesseract-addressed read whose `options` block is
+ * missing or empty, with `empty options` (docs/upstream-issues.md §4). Without
+ * this the mock answers a request devnet would refuse — so dropping the block,
+ * or passing an explicit `{}`, stays green in CI and fails live.
+ */
+function requireOptions(p: Record<string, unknown>): void {
+  const options = p["options"];
+  if (typeof options !== "object" || options === null || Object.keys(options).length === 0) {
+    throw new RpcFailure("empty options");
+  }
+}
+
+/** `moi.Call` / `moi.FuelEstimate` carry the interaction under `ix_args`. */
+function requireIxArgs(p: Record<string, unknown>): Array<Record<string, unknown>> {
+  const args = p["ix_args"];
+  if (typeof args !== "object" || args === null) {
+    throw new RpcFailure("empty ix_args");
+  }
+  const ops = (args as Record<string, unknown>)["ix_operations"];
+  if (!Array.isArray(ops) || ops.length === 0) {
+    throw new RpcFailure("interaction has no operations");
+  }
+  return ops as Array<Record<string, unknown>>;
+}
+
 function defaultHandlers(state: NodeState): Record<string, Handler> {
   return {
     "moi.AccountState": (p) => {
       requireId(p["id"]);
+      requireOptions(p);
       return { balance: {}, context_hash: "0x00" };
     },
+    // No options block on this one: the SDK sends `{ id }` alone.
     "moi.AccountMetaInfo": (p) => {
       requireId(p["id"]);
       return { state_exists: state.registered, key_ids: [0] };
     },
     "moi.InteractionCount": (p) => {
       requireId(p["id"]);
+      requireOptions(p);
       return hex(5);
     },
+    // Likewise: the pending counter is not tesseract-addressed.
     "moi.PendingInteractionCount": (p) => {
       requireId(p["id"]);
       return hex(5);
     },
     "moi.TDU": (p) => {
       requireId(p["id"]);
+      requireOptions(p);
       return [{ asset_id: KMOI, token_id: "0x0", amount: hex(state.kmoiBalance) }];
     },
     "moi.AssetInfoByAssetID": (p) => {
       requireId(p["asset_id"]);
+      requireOptions(p);
       return {
         symbol: "KMOI",
         dimension: "0x0",
@@ -151,17 +184,27 @@ function defaultHandlers(state: NodeState): Record<string, Handler> {
     }),
     "moi.LogicManifest": (p) => {
       requireId(p["logic_id"]);
+      requireOptions(p);
       // encoding "JSON": the node returns the marshalled JSON as hex bytes.
       return `0x${Buffer.from(JSON.stringify(MANIFEST), "utf8").toString("hex")}`;
     },
-    "moi.Call": () => ({
-      status: state.callStatus,
-      fuel_used: "0x12b",
-      ix_operations: [
-        { tx_type: "0xc", status: state.callStatus, data: { outputs: "0x", error: "0x" } },
-      ],
-    }),
-    "moi.FuelEstimate": () => "0x12b",
+    // Validate what is being simulated. Ignoring these params lets the server
+    // dry-run an interaction unrelated to the one the phone is asked to sign —
+    // the real node would reject an empty ix_operations outright.
+    "moi.Call": (p) => {
+      requireIxArgs(p);
+      return {
+        status: state.callStatus,
+        fuel_used: "0x12b",
+        ix_operations: [
+          { tx_type: "0xc", status: state.callStatus, data: { outputs: "0x", error: "0x" } },
+        ],
+      };
+    },
+    "moi.FuelEstimate": (p) => {
+      requireIxArgs(p);
+      return "0x12b";
+    },
     "moi.SendInteractions": (p) => {
       if (typeof p["ix_args"] !== "string" || typeof p["signatures"] !== "string") {
         throw new RpcFailure("ix_args and signatures are required");
@@ -179,7 +222,7 @@ export async function startMockNode(overrides: Partial<NodeState> = {}): Promise
     registered: true,
     ...overrides,
   };
-  const handlers = defaultHandlers(state);
+  let handlers = defaultHandlers(state);
   const calls: RpcCall[] = [];
 
   const server: Server = createServer((req, res) => {
@@ -199,6 +242,14 @@ export async function startMockNode(overrides: Partial<NodeState> = {}): Promise
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, ...payload }));
       };
+
+      // The real node requires the one-element array wrapper and rejects an
+      // unwrapped param object (docs/upstream-issues.md §4). Accepting both
+      // here would paper over a caller that sends the wrong shape.
+      if (!Array.isArray(body.params)) {
+        reply({ error: { code: -32000, message: "empty options" } });
+        return;
+      }
 
       const handler = handlers[body.method];
       if (!handler) {
@@ -229,6 +280,10 @@ export async function startMockNode(overrides: Partial<NodeState> = {}): Promise
     },
     reset() {
       calls.length = 0;
+      // Restore the defaults too. Hand-written restores after an `on()`
+      // override drift from the real handler — one that skipped requireOptions
+      // would quietly disable that check for every later test on this node.
+      handlers = defaultHandlers(state);
     },
     close() {
       return new Promise<void>((resolve, reject) =>

@@ -75,10 +75,14 @@ Honesty matters more than the pitch: **an agent using this server cannot spend
 money unattended.** Every write waits for a human. For a fleet of autonomous
 agents paying each other, that is a real limitation, not a feature.
 
-The answer is not to put the key back. It is session keys with spend caps — an
-agent authorised for 10 MOI a day, revocable, without ever holding the account
-key. MOI does not expose that primitive yet. Until it does, the honest position
-is that unattended spending is unsolved, and a hot key is not a solution to it.
+The answer is not to put the key back. MOI already has the primitive: MAS0
+mandates. The owner `Approve`s a beneficiary for an amount until an
+`expires_at`, the agent signs `TransferFrom` with its own key, and the owner can
+`Revoke` at any time — amount- and expiry-bounded, live on devnet today. This
+server does not build `TransferFrom` yet, and a mandate is a single cap per
+asset with no per-transaction limit or rate, so richer policy still needs a
+Logic. Until those tools land here, unattended spending is unsolved in **this
+server**, not in MOI — and a hot key is not a solution to it either way.
 
 ## Try it
 
@@ -91,4 +95,4 @@ Then add it to Claude Desktop or Cursor: [quickstart](../quickstart.md).
 ---
 
 _Facts to re-verify before publishing: devnet-only status, the exact tool count,
-and whether session keys are still absent._
+and the current state of MAS0 mandate tooling._

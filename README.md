@@ -31,7 +31,7 @@ you: send 50 KMOI to the agent called pricefeed-01
 
 | | stdio (local) | HTTP (hostable) |
 |---|---|---|
-| Tools | all 12 | the 6 read tools |
+| Tools | all 12 | `ping` + the 5 read tools |
 | Wallet | yes | none |
 | Needs `WC_PROJECT_ID` | yes | no (see note) |
 | State | WalletConnect session | none |
@@ -47,7 +47,7 @@ over the network by construction rather than by configuration.
 
 ```bash
 PORT=8787 node dist/http.js                          # local build -> http://localhost:8787/mcp
-PORT=8787 npx -p @moi-protocol/mcp-server moi-mcp-http   # from npm (see known issues)
+PORT=8787 npx -p @moi-protocol/mcp-server moi-mcp-http   # from npm
 curl localhost:8787/health
 ```
 
@@ -88,7 +88,7 @@ The stdio server registers all 12. The HTTP server registers the first six.
 | `moi_get_account` | no | Nonce, registration, and every asset balance |
 | `moi_get_asset` | no | Symbol, standard, supply, decimal dimension |
 | `moi_get_interaction` | no | Status, sender, fuel used, operations of an interaction |
-| `moi_get_logic` | no | A logic's routines and their types (see known issues) |
+| `moi_get_logic` | no | A logic's callable routines and their kinds |
 | `moi_resolve_agent` | no | Look up an agent in the on-chain registry |
 | `moi_connect_wallet` | — | Returns a QR to scan with MOI Wallet |
 | `moi_wallet_status` | — | Paired account, network, expiry, config health |
@@ -135,8 +135,9 @@ lists the real ones in its error message.
 
 ## Configuration
 
-Every environment variable the server reads. The first eight are validated by
-`src/config.ts`; the rest are read where they are used.
+Every environment variable the server reads. The first seven are validated by
+`src/config.ts` (they are `schema.Config`); the rest are read where they are
+used.
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -200,7 +201,7 @@ npm run inspect         # MCP Inspector against the local source
 npm run pair            # terminal QR; npm run status shows the session
 ```
 
-`npm test` is hermetic: 168 tests drive the real tool handlers over an
+`npm test` is hermetic: 169 tests drive the real tool handlers over an
 in-memory MCP transport against a fake node and a fake wallet. `docs/testing-plan.md`
 lists what each tier covers.
 
