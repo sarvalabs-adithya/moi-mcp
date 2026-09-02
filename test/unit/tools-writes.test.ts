@@ -12,6 +12,7 @@ import {
   KMOI,
   LOGIC,
   OTHER,
+  RpcFailure,
   SENT_HASH,
   startMockNode,
   type MockNode,
@@ -295,6 +296,21 @@ describe("wallet outcomes map onto the WriteResult union", () => {
     expect(result.text).toMatch(/approved the interaction but broadcasting it failed/);
   });
 
+  it("node accepting the interaction but returning no hash is reported as an error, not swallowed", async () => {
+    seedSession(h.home);
+    // A misbehaving node: request accepted (no RPC error), but the result is
+    // not a usable interaction hash.
+    node.on("moi.SendInteractions", (p) => {
+      if (typeof p["ix_args"] !== "string" || typeof p["signatures"] !== "string") {
+        throw new RpcFailure("ix_args and signatures are required");
+      }
+      return "";
+    });
+    const result = await h.call("moi_transfer", TRANSFER);
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/accepted the interaction but returned no hash/);
+  });
+
   it("REGRESSION: the rejected envelope passes the advertised outputSchema", async () => {
     // Every write tool once advertised only the `sent` variant, so every
     // rejection failed output validation at the server and was surfaced to
@@ -390,6 +406,103 @@ describe("moi_create_asset", () => {
   });
 });
 
+describe("moi_mint", () => {
+  it("signs on the phone, broadcasts from here, returns the hash", async () => {
+    seedSession(h.home);
+
+    const result = await h.call("moi_mint", { assetId: KMOI, amount: "500" });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual({
+      status: "sent",
+      hash: SENT_HASH,
+      explorerUrl: `https://voyage.moi.technology/interaction/?${SENT_HASH}`,
+    });
+
+    const ix = signedIx();
+    const ops = opsOf(ix);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]!.type).toBe(5); // ASSET_INVOKE
+    expect(ops[0]!.payload["asset_id"]).toBe(KMOI);
+    expect(ops[0]!.payload["callsite"]).toBe("Mint");
+
+    // The interaction that was SIMULATED is the interaction that was SIGNED,
+    // and the beneficiary/amount actually minted are what the phone approved.
+    const simulated = simulatedOps();
+    expect(simulated[0]!.payload).toContain(String(ops[0]!.payload["calldata"]));
+    const send = node.calls.find((c) => c.method === "moi.SendInteractions");
+    expect(send?.params).toEqual(signatureFor(wallet.requests[0]!));
+  });
+
+  it("defaults the recipient to the connected wallet's own account when `to` is omitted", async () => {
+    seedSession(h.home);
+    await h.call("moi_mint", { assetId: KMOI, amount: "1" });
+
+    const ops = opsOf(signedIx());
+    // The beneficiary is baked into the calldata, not a top-level field —
+    // pin it against the account moi_connect_wallet actually holds.
+    expect(String(ops[0]!.payload["calldata"])).toContain(ACCOUNT.slice(2));
+  });
+
+  it("mints to an explicit recipient instead of the connected account", async () => {
+    seedSession(h.home);
+    await h.call("moi_mint", { assetId: KMOI, amount: "1", to: OTHER });
+
+    const ops = opsOf(signedIx());
+    expect(String(ops[0]!.payload["calldata"])).toContain(OTHER.slice(2));
+    expect(String(ops[0]!.payload["calldata"])).not.toContain(ACCOUNT.slice(2));
+  });
+
+  it("mints the exact scaled amount, not a rounded or truncated one", async () => {
+    seedSession(h.home);
+    // KMOI's dimension is 0 in the mock node, so "500" must scale to exactly 500.
+    await h.call("moi_mint", { assetId: KMOI, amount: "500" });
+    const ops = opsOf(signedIx());
+    // Amount 500 POLO-encodes as `03 01f4` (uint16 0x01f4); a wrong scale
+    // (e.g. dimension applied twice) would change this byte string.
+    expect(String(ops[0]!.payload["calldata"])).toContain("0301f4");
+  });
+
+  it("unknown asset is reported as an error before any wallet traffic", async () => {
+    seedSession(h.home);
+    node.on("moi.AssetInfoByAssetID", () => {
+      throw new RpcFailure("asset not found");
+    });
+
+    const result = await h.call("moi_mint", { assetId: KMOI, amount: "1" });
+    expect(result.isError).toBe(true);
+    expect(wallet.request).not.toHaveBeenCalled();
+    expect(node.methods()).not.toContain("moi.SendInteractions");
+  });
+
+  it("simulation status 1 (not the manager, or over max supply) → refused locally with the hint", async () => {
+    seedSession(h.home);
+    node.state.callStatus = 1;
+
+    const result = await h.call("moi_mint", { assetId: KMOI, amount: "1" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/would fail \(receipt status 1\)/);
+    expect(result.text).toMatch(/requires you to be the asset's manager/);
+    expect(result.text).toMatch(/maximum supply/);
+    expect(wallet.request).not.toHaveBeenCalled();
+    expect(node.methods()).not.toContain("moi.SendInteractions");
+  });
+
+  it("rejects an amount with more decimals than the asset's dimension, before any wallet traffic", async () => {
+    seedSession(h.home);
+    const result = await h.call("moi_mint", { assetId: KMOI, amount: "1.5" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/dimension is 0/);
+    expect(wallet.request).not.toHaveBeenCalled();
+  });
+
+  it("unpaired wallet → rejected/wallet_disconnected before any node or wallet traffic", async () => {
+    const result = await h.call("moi_mint", { assetId: KMOI, amount: "1" });
+    expect(result.structuredContent).toMatchObject({ status: "rejected", reason: "wallet_disconnected" });
+    expect(wallet.request).not.toHaveBeenCalled();
+    expect(node.calls).toHaveLength(0);
+  });
+});
+
 describe("moi_call_logic", () => {
   it("kind:'view' runs against the node with no session and no wallet request", async () => {
     // Deliberately NOT seeding a session.
@@ -434,6 +547,30 @@ describe("moi_call_logic", () => {
     expect(node.calls.find((c) => c.method === "moi.SendInteractions")?.params).toEqual(
       signatureFor(wallet.requests[0]!),
     );
+  });
+
+  it("kind:'view' logic fails to load → reported as an error, not routed as an unknown routine", async () => {
+    node.on("moi.LogicManifest", () => {
+      throw new RpcFailure("logic not found");
+    });
+
+    const result = await h.call("moi_call_logic", { logicId: LOGIC, routine: "Ping", kind: "view" });
+    expect(result.isError).toBe(true);
+    expect(wallet.request).not.toHaveBeenCalled();
+    expect(node.methods()).not.toContain("moi.Call");
+  });
+
+  it("kind:'invoke' logic fails to load → wrapped with a 'Could not load logic' message, before any wallet traffic", async () => {
+    seedSession(h.home);
+    node.on("moi.LogicManifest", () => {
+      throw new RpcFailure("logic not found");
+    });
+
+    const result = await h.call("moi_call_logic", { logicId: LOGIC, routine: "Ping", kind: "invoke" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(new RegExp(`Could not load logic ${LOGIC}`));
+    expect(wallet.request).not.toHaveBeenCalled();
+    expect(node.methods()).not.toContain("moi.SendInteractions");
   });
 });
 
