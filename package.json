@@ -45,7 +45,8 @@
     "status": "node dist/cli.js status",
     "dev:http": "tsx src/http.ts",
     "start:http": "node dist/http.js",
-    "cross-check": "node scripts/cross-check.mjs"
+    "cross-check": "node scripts/cross-check.mjs",
+    "bundle:mcpb": "node scripts/bundle-mcpb.mjs"
   },
   "keywords": [
     "mcp",
