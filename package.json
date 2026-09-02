@@ -11,7 +11,8 @@
   "bin": {
     "mcp-server": "dist/index.js",
     "moi-mcp": "dist/cli.js",
-    "moi-mcp-http": "dist/http.js"
+    "moi-mcp-http": "dist/http.js",
+    "moi-mcp-hosted": "dist/server.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -60,6 +61,7 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@walletconnect/sign-client": "^2.17.0",
     "dotenv": "^16.4.5",
+    "express": "^5.2.1",
     "js-moi-sdk": "^0.8.0",
     "js-polo": "^0.1.4",
     "qrcode": "^1.5.4",
@@ -67,8 +69,9 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
-    "@types/qrcode": "^1.5.5",
+    "@types/qrcode": "^1.5.6",
     "@types/qrcode-terminal": "^0.12.2",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",

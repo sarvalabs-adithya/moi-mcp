@@ -13,6 +13,7 @@ import { config as loadDotenv } from "dotenv";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
+import { z } from "zod";
 
 import { Config } from "./schema.js";
 
@@ -136,6 +137,71 @@ export function getConfig(): LoadedConfig {
 export function resetConfigCache(): void {
   cached = undefined;
   dotenvLoaded = false;
+}
+
+// ---------------------------------------------------------------------------
+// Hosted transport config (src/server.ts) — additive to the Config above, not
+// part of it. stdio and the read-only HTTP entry point never read these four
+// keys, and the shared Config's schema and defaults are unchanged by them.
+// ---------------------------------------------------------------------------
+
+const HostedConfigSchema = z.object({
+  HOSTED_PORT: z.coerce.number().int().positive().default(8788),
+  PUBLIC_URL: z.string().url().default("http://localhost:8788"),
+  MOI_DATA_DIR: z.string().default("~/.moi-mcp-hosted"),
+  /** Wall-clock budget for a hosted tool call. claude.ai allows 300s; stay under it. */
+  HOSTED_TIMEOUT_MS: z.coerce.number().positive().default(240_000),
+});
+
+export type HostedConfig = z.infer<typeof HostedConfigSchema> & {
+  /** MOI_DATA_DIR with `~` expanded to an absolute path. Created on load. */
+  dataDir: string;
+};
+
+let cachedHosted: HostedConfig | undefined;
+
+/**
+ * Parse and validate the hosted-transport environment. Throws with an
+ * actionable message. Pass an explicit `env` in tests to avoid touching the
+ * real process env.
+ */
+export function loadHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedConfig {
+  const raw: Record<string, string> = {};
+  for (const key of Object.keys(HostedConfigSchema.shape)) {
+    const value = env[key];
+    if (typeof value === "string" && value.trim() !== "") raw[key] = value;
+  }
+
+  const parsed = HostedConfigSchema.safeParse(raw);
+  if (!parsed.success) {
+    const detail = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+    throw new Error(`Invalid hosted MOI MCP configuration — ${detail}.`);
+  }
+
+  const dataDir = expandHome(parsed.data.MOI_DATA_DIR);
+  // 0700: this directory holds per-user WalletConnect session records
+  // (wc/store.ts's sessions/, keyed by sha256(userId)), the OAuth client/token
+  // stores, and the write journal. It also holds wc-relay-scratch/ — the
+  // shared, single-user WalletConnectClient's OWN internal session file
+  // (src/server.ts's makeResolveUri), which is NOT per-user and must never be
+  // read as if it were; per-user lookups always go through the sessions/
+  // store above.
+  mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+
+  return { ...parsed.data, dataDir };
+}
+
+/** Memoised accessor, mirroring getConfig(). First call creates MOI_DATA_DIR. */
+export function getHostedConfig(): HostedConfig {
+  cachedHosted ??= loadHostedConfig();
+  return cachedHosted;
+}
+
+/** Test seam. */
+export function resetHostedConfigCache(): void {
+  cachedHosted = undefined;
 }
 
 // ---------------------------------------------------------------------------
