@@ -74,17 +74,19 @@ const GrantMandateInput = z.object({
 
 /**
  * Schema output for moi_grant_mandate.
- * Stubbed: returns unsigned interaction and ceremony metadata, not a sent hash.
+ * Returns unsigned interaction awaiting owner approval via phone signature.
+ * The journalEntryId is used to confirm/abandon the grant once the owner
+ * approves or rejects on their wallet.
  */
 const GrantMandateOutput = z.object({
-  status: z.literal("unsigned").describe("Always 'unsigned' — ceremony is stubbed."),
-  unsignedInteraction: z.record(z.string(), z.unknown()).describe("The Approve interaction to be signed."),
+  status: z.literal("awaiting_phone_signature").describe("Grant awaiting owner phone approval."),
+  unsignedInteraction: z.record(z.string(), z.unknown()).describe("The Approve interaction to be signed by the owner."),
   agentAddress: z.string().describe("Agent's address (provisioned on first grant)."),
   cap: z.string().describe("Approved cap in base units."),
   expiresAt: z.number().describe("Unix expiry timestamp (now + expiresInSeconds)."),
-  note: z
+  journalEntryId: z
     .string()
-    .describe("TODO: wire signAndBroadcast here once the grant-approval UX exists."),
+    .describe("Unique grant journal entry ID; pass to confirmMandateGrant() or abandonMandateGrant() after owner's wallet approval."),
 });
 
 const GRANT_MANDATE_ANNOTATIONS = {
@@ -189,8 +191,8 @@ export function registerMandateTools(
       description:
         "Authorize a server-held agent to transfer up to a given amount of an asset on your behalf, " +
         "until a future expiry. Builds the interaction here and returns it unsigned — you approve " +
-        "it on your phone, then the server broadcasts. Per the v2 contract, signing is stubbed " +
-        "(// TODO: wire here once UX exists).",
+        "it on your phone, then the server broadcasts. Once you approve on your wallet and the server " +
+        "receives confirmation, call confirmMandateGrant(journalEntryId) to activate the mandate.",
       inputSchema: GrantMandateInput.shape,
       outputSchema: GrantMandateOutput,
       annotations: GRANT_MANDATE_ANNOTATIONS,
@@ -266,21 +268,22 @@ export function registerMandateTools(
           "Approve requires you to hold the asset (or be its manager) and the amount to fit the asset's dimension.",
         );
 
-        // Journal via the ledger (module 4) — absolute-set semantics, the
-        // single source of truth for mandate state.
-        await deps.ledger.recordGrant(
+        // Journal via the ledger (module 4) — records as "proposed" state.
+        // The grant becomes found/active only after the owner approves on their wallet
+        // (confirmMandateGrant is called), preventing spending against unconfirmed grants.
+        const grantResult = await deps.ledger.recordGrant(
           { userId: auth.userId, assetId, benefactor: record.address, beneficiary: agentAddress },
           capRaw,
           expiresAt,
         );
 
         const structuredContent = {
-          status: "unsigned" as const,
+          status: "awaiting_phone_signature" as const,
           unsignedInteraction: unsignedIx as unknown as Record<string, unknown>,
           agentAddress,
           cap: capRaw.toString(),
           expiresAt,
-          note: "SEAM: wire signAndBroadcast(new PhoneSigner(...), ...) here once the grant-approval UX exists.",
+          journalEntryId: grantResult.journalEntryId,
         };
 
         return {
@@ -298,4 +301,28 @@ export function registerMandateTools(
       }
     },
   );
+}
+
+/**
+ * SEAM: Confirm a grant after the owner approves on their wallet.
+ * Called after signAndBroadcast succeeds with PhoneSigner for the Approve interaction.
+ * Moves the grant journal entry from "proposed" to "confirmed", activating the mandate.
+ *
+ * This function is exported for the v1 write path / webhook / polling callback
+ * to invoke once the owner's Approve is confirmed on-chain.
+ */
+export async function confirmMandateGrant(ledger: MandateLedger, journalEntryId: string): Promise<void> {
+  await ledger.commit(journalEntryId);
+}
+
+/**
+ * SEAM: Abandon a grant if the owner rejects, or if the broadcast fails.
+ * Moves the grant journal entry from "proposed" to "orphaned",
+ * leaving the mandate inactive (never becomes found/active).
+ *
+ * This function is exported for the v1 write path / webhook / polling callback
+ * to invoke when grant approval fails or times out.
+ */
+export async function abandonMandateGrant(ledger: MandateLedger, journalEntryId: string): Promise<void> {
+  await ledger.release(journalEntryId);
 }

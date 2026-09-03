@@ -79,6 +79,7 @@ function makeDeps(store: WalletSessionStore): HostedDeps {
   return {
     authenticate: fakeAuthenticate,
     challengeHeader: fakeChallengeHeader,
+    dataDir,
     store,
     journal,
     agentKeys: new FileAgentKeyStore(dataDir),

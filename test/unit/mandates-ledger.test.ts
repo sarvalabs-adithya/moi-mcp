@@ -808,4 +808,168 @@ describe("MandateLedger", () => {
       expect(r2.cap).toBe(200n);
     });
   });
+
+  describe("grant state machine seam (confirmMandateGrant / abandonMandateGrant)", () => {
+    it("grant starts proposed and cannot be used until confirmed", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      // Before confirmation: mandate is not found
+      const beforeConfirm = await ledger.get(defaultKey);
+      expect(beforeConfirm.found).toBe(false);
+      expect(beforeConfirm.active).toBe(false);
+
+      // Attempting to spend against unconfirmed grant fails
+      await expect(ledger.reserve(defaultKey, 100n)).rejects.toThrow(MoiError);
+      try {
+        await ledger.reserve(defaultKey, 100n);
+      } catch (err) {
+        if (err instanceof MoiError) {
+          expect(err.code).toBe(ErrorCode.MANDATE_NOT_FOUND);
+        }
+      }
+
+      // After confirmation: mandate becomes active
+      await ledger.commit(grant.journalEntryId);
+
+      const afterConfirm = await ledger.get(defaultKey);
+      expect(afterConfirm.found).toBe(true);
+      expect(afterConfirm.active).toBe(true);
+      expect(afterConfirm.cap).toBe(500n);
+      expect(afterConfirm.remaining).toBe(500n);
+
+      // Now spending against the confirmed grant succeeds
+      const reserve = await ledger.reserve(defaultKey, 100n);
+      expect(reserve.remainingAfter).toBe(400n);
+    });
+
+    it("abandonMandateGrant releases a proposed grant, leaving it inactive forever", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      // Before abandon: not found
+      let record = await ledger.get(defaultKey);
+      expect(record.found).toBe(false);
+
+      // Abandon the grant (e.g., owner rejected on wallet, or broadcast failed)
+      await ledger.release(grant.journalEntryId);
+
+      // After abandon: still not found, and will never be found (orphaned entry)
+      record = await ledger.get(defaultKey);
+      expect(record.found).toBe(false);
+      expect(record.active).toBe(false);
+
+      // Reserve still fails
+      await expect(ledger.reserve(defaultKey, 100n)).rejects.toThrow(MoiError);
+      try {
+        await ledger.reserve(defaultKey, 100n);
+      } catch (err) {
+        if (err instanceof MoiError) {
+          expect(err.code).toBe(ErrorCode.MANDATE_NOT_FOUND);
+        }
+      }
+    });
+
+    it("multiple grant attempts return unique journalEntryIds, preventing confirm/abandon collisions", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant1 = await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      const grant2 = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+
+      // IDs are different
+      expect(grant1.journalEntryId).not.toBe(grant2.journalEntryId);
+
+      // Confirming only the second grant (the newer one) activates 500n, not 100n
+      await ledger.commit(grant2.journalEntryId);
+
+      const record = await ledger.get(defaultKey);
+      expect(record.found).toBe(true);
+      expect(record.cap).toBe(500n);
+
+      // The first grant (still proposed) is not counted
+    });
+
+    it("abandoned grant can be replaced by a new grant attempt", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant1 = await ledger.recordGrant(defaultKey, 100n, expiresAt);
+      await ledger.release(grant1.journalEntryId);
+
+      // Grant1 is orphaned (rejected on wallet)
+      let record = await ledger.get(defaultKey);
+      expect(record.found).toBe(false);
+
+      // User retries with a new grant
+      await new Promise((r) => setTimeout(r, 10));
+      const grant2 = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await ledger.commit(grant2.journalEntryId);
+
+      // Now the second grant is active
+      record = await ledger.get(defaultKey);
+      expect(record.found).toBe(true);
+      expect(record.cap).toBe(500n);
+      expect(record.active).toBe(true);
+    });
+
+    it("confirmed grant can be spent against, then abandoned (release) if broadcast fails", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant = await ledger.recordGrant(defaultKey, 500n, expiresAt);
+      await ledger.commit(grant.journalEntryId);
+
+      // Mandate is active
+      let record = await ledger.get(defaultKey);
+      expect(record.found).toBe(true);
+      expect(record.active).toBe(true);
+
+      // Reserve a spend (simulated, not yet confirmed)
+      const reservation = await ledger.reserve(defaultKey, 100n);
+      expect(record.spent).toBe(0n); // Not spent until confirmed
+
+      // After reservation, spent counts as proposed
+      record = await ledger.get(defaultKey);
+      expect(record.spent).toBe(100n);
+      expect(record.remaining).toBe(400n);
+
+      // If the spend broadcast fails, release it
+      await ledger.release(reservation.journalEntryId);
+
+      // Spend is removed from the count
+      record = await ledger.get(defaultKey);
+      expect(record.spent).toBe(0n);
+      expect(record.remaining).toBe(500n);
+
+      // Grant is still active (only the spend was released)
+      expect(record.active).toBe(true);
+    });
+
+    it("journalEntryId format matches mandate_grant prefix for identifiability", async () => {
+      const dir = tempDataDir();
+      const journal = new WriteJournal(dir);
+      const ledger = new MandateLedger(journal, dir);
+
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+      const grant = await ledger.recordGrant(defaultKey, 100n, expiresAt);
+
+      // ID should have mandate_grant prefix
+      expect(grant.journalEntryId).toMatch(/^mandate_grant:/);
+    });
+  });
 });

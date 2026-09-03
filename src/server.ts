@@ -43,7 +43,9 @@ import { NETWORKS } from "./moi/provider.js";
 import type { Network } from "./schema.js";
 import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing } from "./pairing/index.js";
 import { registerMandateTools } from "./tools/mandates.js";
+import { registerMandateExecutor } from "./tools/mandates-execute.js";
 import { FileAgentKeyStore, type AgentKeyStore } from "./signing/agent-keys.js";
+import { getProvider } from "./moi/provider.js";
 import { MandateLedger } from "./mandates/ledger.js";
 import { WalletConnectClient } from "./wc/client.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
@@ -69,6 +71,7 @@ export const GATED = [
   "moi_wallet_status",
   "moi_mandate_status",
   "moi_grant_mandate",
+  "moi_transfer_under_mandate",
 ] as const;
 
 /**
@@ -89,6 +92,7 @@ const REQUIRED_SCOPE: Record<(typeof GATED)[number], "moi:read" | "moi:write"> =
   moi_wallet_status: "moi:read",
   moi_mandate_status: "moi:read",
   moi_grant_mandate: "moi:write",
+  moi_transfer_under_mandate: "moi:write",
 };
 
 export interface HostedDeps {
@@ -106,6 +110,8 @@ export interface HostedDeps {
   createPairingLink(userId: string): { url: string; expiresAt: number };
   /** Wrapper that provides MOI_NETWORK and optional MOI_RPC_URL for the provider. */
   providerOptions(): { network: Network; rpcUrl?: string };
+  /** Data directory for persisting agent keys and sessions. */
+  dataDir: string;
 }
 
 /** Collect a JSON body, refusing anything oversized. Mirrors src/http.ts. */
@@ -345,6 +351,27 @@ export function buildHostedApp(deps: HostedDeps): Application {
         },
         auth,
       );
+      registerMandateExecutor(
+        server,
+        {
+          store: deps.store,
+          ledger: deps.ledger,
+          agentKeys: deps.agentKeys,
+          provider: {
+            sendInteraction: async (req) => {
+              const provider = getProvider(deps.providerOptions());
+              return (provider as any).sendInteraction(req);
+            },
+            getPendingInteractionCount: async (id, keyId) => {
+              const provider = getProvider(deps.providerOptions());
+              return (provider as any).getPendingInteractionCount(id, keyId);
+            },
+          },
+          dataDir: deps.dataDir,
+          providerOptions: deps.providerOptions,
+        },
+        auth,
+      );
     }
 
     const transport = withModernSchemaDialect(
@@ -481,6 +508,7 @@ async function main(): Promise<void> {
       resolveUriMounted: true,
       createPairingLink: (userId: string) => createPairingLinkFor(userId, hosted.PUBLIC_URL),
       providerOptions,
+      dataDir: hosted.dataDir,
     }),
   );
 
