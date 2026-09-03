@@ -112,3 +112,45 @@ describe("cap accounting fails closed", () => {
     await expect(ledger.reserve(key, 700n)).rejects.toThrow();
   });
 });
+
+describe("a grant only activates once the Approve is on chain", () => {
+  it("stays inactive when the owner rejects on their phone", async () => {
+    const dir = tempDataDir();
+    const ledger = new MandateLedger(new WriteJournal(dir), dir);
+
+    // moi_grant_mandate journals the grant, then asks the phone to sign. If the
+    // owner declines, the handler abandons it. Anything else would leave a
+    // mandate the owner never approved looking spendable.
+    const { journalEntryId } = await ledger.recordGrant(
+      key,
+      1000n,
+      Math.floor(Date.now() / 1000) + 3600,
+    );
+    expect((await ledger.get(key)).found).toBe(false);
+
+    await ledger.release(journalEntryId);
+
+    const after = await ledger.get(key);
+    expect(after.found).toBe(false);
+    expect(after.active).toBe(false);
+  });
+
+  it("becomes active only after the grant is confirmed", async () => {
+    const dir = tempDataDir();
+    const ledger = new MandateLedger(new WriteJournal(dir), dir);
+
+    const { journalEntryId } = await ledger.recordGrant(
+      key,
+      1000n,
+      Math.floor(Date.now() / 1000) + 3600,
+    );
+    expect((await ledger.get(key)).found).toBe(false);
+
+    await ledger.commit(journalEntryId);
+
+    const after = await ledger.get(key);
+    expect(after.found).toBe(true);
+    expect(after.active).toBe(true);
+    expect(after.remaining).toBe(1000n);
+  });
+})

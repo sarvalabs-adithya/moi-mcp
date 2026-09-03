@@ -22,7 +22,8 @@ import { ErrorCode, type Network } from "../schema.js";
 import type { AuthInfo } from "../auth/index.js";
 import type { WalletSessionStore } from "../wc/store.js";
 import type { WriteJournal } from "../journal.js";
-import { assertWillSucceed, senderFor } from "./write-core.js";
+import { assertWillSucceed, senderFor, broadcastSigned } from "./write-core.js";
+import type { WalletConnectHubLike } from "../wc/hub.js";
 import type { AgentKeyStore } from "../signing/agent-keys.js";
 import { MandateLedger, type MandateKey } from "../mandates/ledger.js";
 
@@ -31,6 +32,9 @@ import { MandateLedger, type MandateKey } from "../mandates/ledger.js";
  */
 export interface MandateToolDeps {
   store: WalletSessionStore;
+  /** Shared WalletConnect hub. Approve is owner-signed, so the grant is sent
+   *  to the caller's own phone on their own session topic. */
+  hub: WalletConnectHubLike;
   /** Kept for parity with the contract's dependency list; mandate journal
    *  writes go through `ledger`, which owns the journal internally. */
   journal: WriteJournal;
@@ -79,8 +83,8 @@ const GrantMandateInput = z.object({
  * approves or rejects on their wallet.
  */
 const GrantMandateOutput = z.object({
-  status: z.literal("awaiting_phone_signature").describe("Grant awaiting owner phone approval."),
-  unsignedInteraction: z.record(z.string(), z.unknown()).describe("The Approve interaction to be signed by the owner."),
+  status: z.literal("active").describe("Owner approved on their phone and the Approve is on chain."),
+  hash: z.string().describe("Interaction hash of the on-chain Approve."),
   agentAddress: z.string().describe("Agent's address (provisioned on first grant)."),
   cap: z.string().describe("Approved cap in base units."),
   expiresAt: z.number().describe("Unix expiry timestamp (now + expiresInSeconds)."),
@@ -277,9 +281,26 @@ export function registerMandateTools(
           expiresAt,
         );
 
+        // Send the Approve to the owner's own phone, on their own session
+        // topic, and only activate the mandate once it is actually on chain.
+        // A grant that is merely journaled authorizes nothing: get() gates on
+        // the confirmed state, so a failure here leaves the mandate inactive.
+        let hash: string;
+        try {
+          const { ix_args, signatures } = await deps.hub.signInteractionFor(record.topic, unsignedIx, {
+            description: `Allow the agent to spend up to ${amountStr} until ${new Date(expiresAt * 1000).toISOString()}`,
+          });
+          hash = await broadcastSigned(ix_args, signatures);
+        } catch (e) {
+          await abandonMandateGrant(deps.ledger, grantResult.journalEntryId);
+          throw e;
+        }
+
+        await confirmMandateGrant(deps.ledger, grantResult.journalEntryId);
+
         const structuredContent = {
-          status: "awaiting_phone_signature" as const,
-          unsignedInteraction: unsignedIx as unknown as Record<string, unknown>,
+          status: "active" as const,
+          hash,
           agentAddress,
           cap: capRaw.toString(),
           expiresAt,
@@ -304,24 +325,19 @@ export function registerMandateTools(
 }
 
 /**
- * SEAM: Confirm a grant after the owner approves on their wallet.
- * Called after signAndBroadcast succeeds with PhoneSigner for the Approve interaction.
- * Moves the grant journal entry from "proposed" to "confirmed", activating the mandate.
+ * Activates a grant once the owner's Approve is on chain, moving its journal
+ * entry from "proposed" to "confirmed". Until this runs the mandate is not
+ * found or active, so nothing can be spent against it.
  *
- * This function is exported for the v1 write path / webhook / polling callback
- * to invoke once the owner's Approve is confirmed on-chain.
+ * Called by moi_grant_mandate after the phone signs and the broadcast lands.
  */
 export async function confirmMandateGrant(ledger: MandateLedger, journalEntryId: string): Promise<void> {
   await ledger.commit(journalEntryId);
 }
 
 /**
- * SEAM: Abandon a grant if the owner rejects, or if the broadcast fails.
- * Moves the grant journal entry from "proposed" to "orphaned",
- * leaving the mandate inactive (never becomes found/active).
- *
- * This function is exported for the v1 write path / webhook / polling callback
- * to invoke when grant approval fails or times out.
+ * Abandons a grant when the owner rejects it or the broadcast fails, moving
+ * its journal entry to "orphaned" so the mandate never becomes active.
  */
 export async function abandonMandateGrant(ledger: MandateLedger, journalEntryId: string): Promise<void> {
   await ledger.release(journalEntryId);

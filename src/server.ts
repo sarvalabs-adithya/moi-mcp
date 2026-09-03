@@ -347,6 +347,7 @@ export function buildHostedApp(deps: HostedDeps): Application {
         server,
         {
           store: deps.store,
+          hub: deps.hub,
           journal: deps.journal,
           agentKeys: deps.agentKeys,
           ledger: deps.ledger,
