@@ -563,8 +563,18 @@ export function wireSessionDeleteReconciliation(hub: WalletConnectHubLike, store
  * it terminal so the next status check reflects reality instead of a tool
  * silently retrying against a stale nonce.
  */
-async function reconcileJournalOnBoot(journal: WriteJournal): Promise<void> {
+export async function reconcileJournalOnBoot(journal: WriteJournal): Promise<void> {
   await journal.reconcileOnBoot(async (entry) => {
+    const hash = (entry as { ixHash?: unknown }).ixHash;
+    if (entry.state === "broadcast" && typeof hash === "string" && hash.length > 0) {
+      // The node accepted it and gave us a hash before the process died. That
+      // is a transaction on the chain, and the only honest thing to record is
+      // that it landed. Calling it orphaned would be a lie the journal then
+      // tells forever.
+      log("info", `journal: ${entry.kind} ${entry.id} had broadcast before exit; recording it confirmed`);
+      await journal.update(entry.id, "confirmed", { detail: "finalized on boot; broadcast completed before exit" });
+      return;
+    }
     log(
       "error",
       `journal: interaction ${entry.id} (${entry.kind}, user ${entry.userId}) was left in state ` +

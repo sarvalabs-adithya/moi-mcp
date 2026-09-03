@@ -709,7 +709,7 @@ describe("cross-user write tools isolation", () => {
   // an approved-but-unbroadcast interaction with zero durable record of it.
   // =========================================================================
   describe("write journal", () => {
-    it("14. a successful transfer is journaled proposed -> signed -> broadcast, with ixHash", async () => {
+    it("14. a successful transfer is journaled proposed -> signed -> broadcast -> confirmed, with ixHash", async () => {
       await store.set({
         version: 1,
         userId: USER_A_ID,

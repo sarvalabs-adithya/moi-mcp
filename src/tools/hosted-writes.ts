@@ -194,6 +194,10 @@ export function registerHostedWrites(
         const hash = await broadcastSigned(ix_args, signatures);
         await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
+        // Nothing later confirms this from the server side, so broadcast is
+        // the terminal success; leaving it non-terminal made every restart
+        // report a landed transaction as stranded.
+        await deps.journal.update(id, "confirmed", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -253,6 +257,10 @@ export function registerHostedWrites(
         const hash = await broadcastSigned(ix_args, signatures);
         await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
+        // Nothing later confirms this from the server side, so broadcast is
+        // the terminal success; leaving it non-terminal made every restart
+        // report a landed transaction as stranded.
+        await deps.journal.update(id, "confirmed", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -302,6 +310,10 @@ export function registerHostedWrites(
         const hash = await broadcastSigned(ix_args, signatures);
         await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
+        // Nothing later confirms this from the server side, so broadcast is
+        // the terminal success; leaving it non-terminal made every restart
+        // report a landed transaction as stranded.
+        await deps.journal.update(id, "confirmed", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -364,6 +376,10 @@ export function registerHostedWrites(
         const hash = await broadcastSigned(ix_args, signatures);
         await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
+        // Nothing later confirms this from the server side, so broadcast is
+        // the terminal success; leaving it non-terminal made every restart
+        // report a landed transaction as stranded.
+        await deps.journal.update(id, "confirmed", { ixHash: hash });
 
         return ok({
           status: "sent",
