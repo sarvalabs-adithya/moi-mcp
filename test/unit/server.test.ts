@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuthInfo } from "../../src/auth/index.js";
+import { WriteJournal } from "../../src/journal.js";
 import { TOOLS } from "../../src/schema.js";
 import { buildHostedApp, GATED, type HostedDeps } from "../../src/server.js";
 import type { WalletConnectHubLike } from "../../src/wc/hub.js";
@@ -90,6 +91,7 @@ function makeDeps(store: WalletSessionStore): HostedDeps {
     challengeHeader: fakeChallengeHeader,
     store,
     hub: new FakeHub(),
+    journal: new WriteJournal(tempHome()),
     resolveUriMounted: true,
     createPairingLink: (userId) => ({
       url: `https://example.test/pair/${userId}`,

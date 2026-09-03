@@ -12,8 +12,10 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { randomUUID } from "node:crypto";
 
 import { getConfig } from "../config.js";
+import { messageOf } from "../errors.js";
 import { interactionUrl } from "../moi/provider.js";
 import type { AuthInfo } from "../auth/types.js";
 import {
@@ -26,6 +28,7 @@ import { MoiError } from "../moi-error.js";
 import { ErrorCode } from "../schema.js";
 import type { StoredWalletSession, WalletSessionStore } from "../wc/store.js";
 import type { WalletConnectHubLike } from "../wc/hub.js";
+import type { WriteJournal } from "../journal.js";
 import {
   WriteOutputShape,
   asWriteResult,
@@ -45,6 +48,30 @@ import {
 export interface HostedWriteDeps {
   store: WalletSessionStore;
   hub: WalletConnectHubLike;
+  journal: WriteJournal;
+}
+
+/**
+ * Record a signed-but-not-broadcast (or never-signed) attempt as failed once
+ * we know it will not complete in this request. `wasSigned` picks the state:
+ * once the wallet has produced a signature, a broadcast failure strands an
+ * approved interaction ("orphaned" — exactly the mid-restart gap
+ * reconcileOnBoot exists to close), whereas a failure before that point (the
+ * user rejected on their phone, the wallet timed out, ...) never left the
+ * user on the hook for anything, so it is just "failed". Journal writes are
+ * best-effort: a journal I/O error must never mask the real tool error.
+ */
+async function markUnwound(
+  journal: WriteJournal,
+  id: string,
+  wasSigned: boolean,
+  err: unknown,
+): Promise<void> {
+  try {
+    await journal.update(id, wasSigned ? "orphaned" : "failed", { detail: messageOf(err) });
+  } catch {
+    /* best-effort audit trail; never let this hide the original error */
+  }
 }
 
 /**
@@ -102,16 +129,26 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       annotations: WRITE_ANNOTATIONS,
     },
     async ({ to, assetId, amount, memo }) => {
+      const id = randomUUID();
+      let proposed = false;
+      let signed = false;
       try {
         const cfg = getConfig();
         const session = await loadSession(deps, auth);
 
         const prepared = await prepareTransfer(session.address, { to, assetId, amount, memo });
 
+        await deps.journal.append({ id, userId: auth.userId, kind: "transfer", state: "proposed" });
+        proposed = true;
+
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
           description: prepared.description,
         });
+        await deps.journal.update(id, "signed");
+        signed = true;
+
         const hash = await broadcastSigned(ix_args, signatures);
+        await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -119,6 +156,7 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
       } catch (err) {
+        if (proposed) await markUnwound(deps.journal, id, signed, err);
         return ok(asWriteResult(err));
       }
     },
@@ -139,6 +177,9 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       annotations: WRITE_ANNOTATIONS,
     },
     async ({ symbol, supply, dimension, standard, isStateful, isFungible, storageFund }) => {
+      const id = randomUUID();
+      let proposed = false;
+      let signed = false;
       try {
         const cfg = getConfig();
         const session = await loadSession(deps, auth);
@@ -155,10 +196,17 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
           balance,
         });
 
+        await deps.journal.append({ id, userId: auth.userId, kind: "create_asset", state: "proposed" });
+        proposed = true;
+
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
           description: prepared.description,
         });
+        await deps.journal.update(id, "signed");
+        signed = true;
+
         const hash = await broadcastSigned(ix_args, signatures);
+        await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -166,6 +214,7 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
       } catch (err) {
+        if (proposed) await markUnwound(deps.journal, id, signed, err);
         return ok(asWriteResult(err));
       }
     },
@@ -184,16 +233,26 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       annotations: WRITE_ANNOTATIONS,
     },
     async ({ assetId, amount, to }) => {
+      const id = randomUUID();
+      let proposed = false;
+      let signed = false;
       try {
         const cfg = getConfig();
         const session = await loadSession(deps, auth);
 
         const prepared = await prepareMint(session.address, { assetId, amount, to });
 
+        await deps.journal.append({ id, userId: auth.userId, kind: "mint", state: "proposed" });
+        proposed = true;
+
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
           description: prepared.description,
         });
+        await deps.journal.update(id, "signed");
+        signed = true;
+
         const hash = await broadcastSigned(ix_args, signatures);
+        await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -201,6 +260,7 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
       } catch (err) {
+        if (proposed) await markUnwound(deps.journal, id, signed, err);
         return ok(asWriteResult(err));
       }
     },
@@ -218,27 +278,40 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       annotations: { ...WRITE_ANNOTATIONS, readOnlyHint: false },
     },
     async ({ logicId, routine, args, kind }) => {
-      try {
-        const cfg = getConfig();
-
-        // A view runs against the node directly — no wallet, no approval, and
-        // no wallet-client construction either.
-        if (kind === "view") {
+      // A view runs against the node directly — no wallet, no approval, no
+      // signed interaction, and so nothing for the journal to track.
+      if (kind === "view") {
+        try {
           const value = await viewLogicCall({ logicId, routine, args, kind: "view" });
           return {
             content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }],
             structuredContent: value,
           };
+        } catch (err) {
+          return ok(asWriteResult(err));
         }
+      }
 
+      const id = randomUUID();
+      let proposed = false;
+      let signed = false;
+      try {
+        const cfg = getConfig();
         const session = await loadSession(deps, auth);
 
         const prepared = await prepareLogicInvoke(session.address, { logicId, routine, args });
 
+        await deps.journal.append({ id, userId: auth.userId, kind: "call_logic", state: "proposed" });
+        proposed = true;
+
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
           description: prepared.description,
         });
+        await deps.journal.update(id, "signed");
+        signed = true;
+
         const hash = await broadcastSigned(ix_args, signatures);
+        await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
           status: "sent",
@@ -246,6 +319,7 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
       } catch (err) {
+        if (proposed) await markUnwound(deps.journal, id, signed, err);
         return ok(asWriteResult(err));
       }
     },

@@ -77,7 +77,7 @@ export class WriteJournal {
       id,
       userId: lastEntry?.userId ?? "unknown",
       kind: lastEntry?.kind ?? "unknown",
-      ixHash: lastEntry?.ixHash,
+      ixHash: (patch?.ixHash as string | undefined) ?? lastEntry?.ixHash,
       state,
       detail: patch?.detail as string | undefined,
       timestamp: new Date().toISOString(),
@@ -88,22 +88,27 @@ export class WriteJournal {
   }
 
   /**
+   * The current (last-written) entry for every id ever appended, terminal
+   * states included — unlike `pending()`, which deliberately excludes them.
+   * For audit/inspection (e.g. tests asserting a terminal outcome like
+   * "orphaned" or "confirmed").
+   */
+  async current(): Promise<JournalEntry[]> {
+    const entries = await this.readAll();
+    const lastById = new Map<string, JournalEntry>();
+    for (const entry of entries) {
+      lastById.set(entry.id, entry);
+    }
+    return Array.from(lastById.values());
+  }
+
+  /**
    * Return all entries whose last state per id is not terminal.
    * Replays the journal taking the last state for each id.
    */
   async pending(): Promise<JournalEntry[]> {
-    const entries = await this.readAll();
-
-    // Map from id to last entry
-    const lastByid = new Map<string, JournalEntry>();
-    for (const entry of entries) {
-      lastByid.set(entry.id, entry);
-    }
-
-    // Filter to non-terminal states
-    return Array.from(lastByid.values()).filter(
-      (entry) => !TERMINAL_STATES.has(entry.state as JournalState)
-    );
+    const entries = await this.current();
+    return entries.filter((entry) => !TERMINAL_STATES.has(entry.state as JournalState));
   }
 
   /**

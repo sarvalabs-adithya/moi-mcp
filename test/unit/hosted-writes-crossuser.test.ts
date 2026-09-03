@@ -16,12 +16,13 @@ import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthInfo } from "../../src/auth/index.js";
+import { WriteJournal } from "../../src/journal.js";
 import { MoiError } from "../../src/moi-error.js";
-import { buildHostedApp, GATED, type HostedDeps } from "../../src/server.js";
+import { buildHostedApp, GATED, wireSessionDeleteReconciliation, type HostedDeps } from "../../src/server.js";
 import type { WalletConnectHubLike } from "../../src/wc/hub.js";
 import type { StoredWalletSession, WalletSessionStore } from "../../src/wc/store.js";
 import { applyEnv, restoreEnv, tempHome } from "../helpers/harness.js";
-import { ACCOUNT, KMOI, startMockNode, type MockNode } from "../helpers/mock-node.js";
+import { ACCOUNT, KMOI, RpcFailure, startMockNode, type MockNode } from "../helpers/mock-node.js";
 import type { SignClientLike } from "../../src/wc/client.js";
 import { WalletConnectHub } from "../../src/wc/hub.js";
 
@@ -148,7 +149,7 @@ function fakeChallengeHeader(opts?: { error?: string; scope?: string }): string 
   );
 }
 
-function makeDeps(store: WalletSessionStore, hub: WalletConnectHubLike): HostedDeps {
+function makeDeps(store: WalletSessionStore, hub: WalletConnectHubLike, journal: WriteJournal): HostedDeps {
   return {
     authenticate: fakeAuthenticate,
     challengeHeader: fakeChallengeHeader,
@@ -159,6 +160,7 @@ function makeDeps(store: WalletSessionStore, hub: WalletConnectHubLike): HostedD
       expiresAt: Date.now() + 300_000,
     }),
     hub,
+    journal,
   };
 }
 
@@ -197,6 +199,7 @@ describe("cross-user write tools isolation", () => {
   let baseUrl: string;
   let store: FakeStore;
   let hub: FakeHub;
+  let journal: WriteJournal;
 
   beforeAll(async () => {
     node = await startMockNode();
@@ -211,8 +214,9 @@ describe("cross-user write tools isolation", () => {
     node.reset();
     store = new FakeStore();
     hub = new FakeHub();
+    journal = new WriteJournal(tempHome());
 
-    const app = buildHostedApp(makeDeps(store, hub));
+    const app = buildHostedApp(makeDeps(store, hub, journal));
     server = createServer(app);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
@@ -422,16 +426,13 @@ describe("cross-user write tools isolation", () => {
     expect(await store.get(USER_A_ID)).toBeDefined();
     expect(await store.get(USER_B_ID)).toBeDefined();
 
-    // buildHostedApp/registerHostedWrites never call hub.onSessionDelete —
-    // that wiring lives in main() (src/server.ts), which this unit test does
-    // not boot. Register the same reconciliation main() installs, so this
-    // test exercises the real mechanism instead of asserting on nothing.
-    hub.onSessionDelete((topic) => {
-      void (async () => {
-        const rec = await store.findByTopic(topic);
-        if (rec) await store.delete(rec.userId);
-      })();
-    });
+    // Regression for the finding that buildHostedApp/registerHostedWrites
+    // never called hub.onSessionDelete and neither did main(): this is the
+    // EXACT function main() now calls (src/server.ts), not a copy of its
+    // logic re-registered here. If main() ever stops calling it (or the
+    // wiring inside it regresses), this test — not just a production outage
+    // — catches it.
+    wireSessionDeleteReconciliation(hub, store);
 
     // Simulate relay session_delete for A
     hub.simulateSessionDelete(TOPIC_A);
@@ -548,14 +549,20 @@ describe("cross-user write tools isolation", () => {
   });
 
   // =========================================================================
-  // 12. One SignClient invariant
+  // 12. One SignClient invariant — NOT covered here
   // =========================================================================
-  it("12. [note] one SignClient invariant verified in integration test", () => {
-    // Verified by checking that WalletConnectHub is constructed once during
-    // main() and makeResolveUri is wired to use the same underlying client.
-    // This is an integration-level test, not unit-testable here.
-    expect(true).toBe(true);
-  });
+  // There used to be an `it(...)` here asserting `expect(true).toBe(true)`
+  // under a comment claiming the one-SignClient invariant was "verified in
+  // integration test" / "elsewhere". Nothing verifies it: main()'s hub
+  // (WalletConnectHub.init, home=hosted.dataDir) and makeResolveUri's own
+  // WalletConnectClient (home=hosted.dataDir/wc-relay-scratch) are two
+  // separate SignClient instances today — see the SEAM comment on
+  // makeResolveUri in src/server.ts. A real regression test needs pairing
+  // through makeResolveUri and signing through the same hub, which needs a
+  // live (or realistically faked) relay round-trip that this suite's FakeHub
+  // does not model and this task's harness explicitly forbids connecting to.
+  // Removed the no-op rather than leave a passing test that asserts nothing;
+  // the fix (share one SignClient) stays tracked as its own scoped task.
 
   // =========================================================================
   // 13. Two users, same tool, different tools in flight simultaneously
@@ -682,6 +689,112 @@ describe("cross-user write tools isolation", () => {
     expect(calls.length).toBeGreaterThanOrEqual(2);
     calls.forEach((call) => {
       expect(call[0]).toBe(TOPIC_A);
+    });
+  });
+
+  // =========================================================================
+  // 14-16. Write journal (M5) — CRITICAL: none of the hosted write tools
+  // wrote to the journal before this fix, so a mid-sign restart could strand
+  // an approved-but-unbroadcast interaction with zero durable record of it.
+  // =========================================================================
+  describe("write journal", () => {
+    it("14. a successful transfer is journaled proposed -> signed -> broadcast, with ixHash", async () => {
+      await store.set({
+        version: 1,
+        userId: USER_A_ID,
+        topic: TOPIC_A,
+        caip2: "moi:14",
+        address: ACCOUNT_A,
+        sessionData: {},
+        createdAt: new Date().toISOString(),
+      });
+
+      const result = await rpc(
+        baseUrl,
+        toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
+        { authorization: "Bearer token-a" },
+      );
+      expect(result.status).toBe(200);
+      expect(result.json.result.structuredContent.status).toBe("sent");
+      const hash = result.json.result.structuredContent.hash as string;
+
+      // The entry reached a terminal-for-this-request "broadcast" state, is
+      // no longer pending, carries the real userId/kind, and its ixHash
+      // matches what the tool actually returned to the caller — not dropped
+      // by journal.update() silently ignoring the patch (a bug fixed
+      // alongside this wiring).
+      const pending = await journal.pending();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({ userId: USER_A_ID, kind: "transfer", state: "broadcast", ixHash: hash });
+    });
+
+    it("15. signing failure before approval journals 'failed', not 'orphaned' (nothing was ever approved)", async () => {
+      await store.set({
+        version: 1,
+        userId: USER_A_ID,
+        topic: TOPIC_A,
+        caip2: "moi:14",
+        address: ACCOUNT_A,
+        sessionData: {},
+        createdAt: new Date().toISOString(),
+      });
+      // Relay-expired: hub.signInteractionFor throws before the phone ever signs.
+      hub.simulateSessionDelete(TOPIC_A);
+
+      const result = await rpc(
+        baseUrl,
+        toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
+        { authorization: "Bearer token-a" },
+      );
+      expect(result.status).toBe(200);
+      expect(result.json.result.structuredContent.status).toBe("rejected");
+
+      // "failed" is terminal (nothing left to reconcile), so check the
+      // journal's full history for this id rather than pending().
+      const entries = await journal.current();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ userId: USER_A_ID, kind: "transfer", state: "failed" });
+    });
+
+    it("16. a broadcast failure AFTER the phone signs journals 'orphaned' — the exact mid-sign-restart gap M5 closes", async () => {
+      await store.set({
+        version: 1,
+        userId: USER_A_ID,
+        topic: TOPIC_A,
+        caip2: "moi:14",
+        address: ACCOUNT_A,
+        sessionData: {},
+        createdAt: new Date().toISOString(),
+      });
+      // The wallet signs fine (FakeHub's default behavior); the node then
+      // refuses to broadcast — the process-restart-between-sign-and-broadcast
+      // scenario, minus the restart, since a synchronous broadcast failure
+      // strands the same signed-but-unbroadcast interaction either way.
+      node.on("moi.SendInteractions", () => {
+        throw new RpcFailure("simulated relay outage");
+      });
+
+      const result = await rpc(
+        baseUrl,
+        toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
+        { authorization: "Bearer token-a" },
+      );
+      // RPC_ERROR isn't one of asWriteResult's rejection reasons, so it
+      // rethrows as a real MCP tool error (isError, no structuredContent) —
+      // the journal write below happens in the catch block BEFORE that
+      // rethrow, so it must not be skipped just because the response isn't
+      // the ok()-wrapped shape the other two tests check.
+      expect(result.status).toBe(200);
+      expect(result.json.result.isError).toBe(true);
+
+      // Approved-but-never-broadcast must never disappear silently: it is
+      // recorded, terminal ("orphaned" is in TERMINAL_STATES, so it will not
+      // be reprocessed by reconcileOnBoot — this request already knows, and
+      // told the caller, that it failed), and correctly distinguished from a
+      // plain pre-sign failure by having actually reached "signed" first.
+      const entries = await journal.current();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ userId: USER_A_ID, kind: "transfer", state: "orphaned" });
     });
   });
 });
