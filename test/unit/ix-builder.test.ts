@@ -387,8 +387,18 @@ describe("chooseStorageFund", () => {
     expect(chooseStorageFund(5_000_000n)).toBe(DEFAULT_STORAGE_FUND);
   });
 
-  it("falls back to what the balance allows, holding fuel back", () => {
-    expect(chooseStorageFund(95_699n)).toBe(95_699n - FUEL_RESERVE);
+  it("funds the minimum rather than the whole balance when the default is out of reach", () => {
+    // The earlier rule handed over everything above the fuel reserve, so
+    // creating one test token on a 21,596 KMOI account moved 11,596 of it into
+    // the asset and left the owner with 6,291. Real balance, real account.
+    expect(chooseStorageFund(21_596n)).toBe(MIN_STORAGE_FUND);
+    expect(chooseStorageFund(95_699n)).toBe(MIN_STORAGE_FUND);
+  });
+
+  it("leaves the owner the bulk of a modest balance", () => {
+    const balance = 21_596n;
+    const spent = chooseStorageFund(balance);
+    expect(balance - spent).toBeGreaterThan(balance / 2n);
   });
 
   it("stays above the measured 6,093 floor at the smallest balance it accepts", () => {

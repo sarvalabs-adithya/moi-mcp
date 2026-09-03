@@ -194,7 +194,13 @@ export function chooseStorageFund(balance: bigint): bigint {
       { balance: balance.toString(), minimum: MIN_STORAGE_FUND.toString() },
     );
   }
-  return affordable < DEFAULT_STORAGE_FUND ? affordable : DEFAULT_STORAGE_FUND;
+  // Fund the default when the account can clearly carry it. Otherwise fund the
+  // minimum rather than everything affordable: handing the asset the entire
+  // balance above the fuel reserve is how creating a 100-supply test token ate
+  // half an account. The money is not burned, it sits in the asset's own
+  // account, but it is no longer spendable from yours.
+  if (affordable >= DEFAULT_STORAGE_FUND) return DEFAULT_STORAGE_FUND;
+  return MIN_STORAGE_FUND;
 }
 
 /**
