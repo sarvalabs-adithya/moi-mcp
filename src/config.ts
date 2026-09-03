@@ -147,6 +147,10 @@ export function resetConfigCache(): void {
 
 const HostedConfigSchema = z.object({
   HOSTED_PORT: z.coerce.number().int().positive().default(8788),
+  /** Redis connection string. Set it and both the wallet session store and
+   *  the WalletConnect SDK keep their state there instead of on local disk,
+   *  which makes the process disposable. Unset, everything stays in files. */
+  REDIS_URL: z.string().optional(),
   PUBLIC_URL: z.string().url().default("http://localhost:8788"),
   MOI_DATA_DIR: z.string().default("~/.moi-mcp-hosted"),
   /** Wall-clock budget for a hosted tool call. claude.ai allows 300s; stay under it. */

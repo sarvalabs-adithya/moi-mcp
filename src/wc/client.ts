@@ -48,6 +48,18 @@ export interface WcConfig {
   requestTimeoutMs: number;
   /** Overrides the network's CAIP-2 chain id. */
   chainId?: string;
+  /**
+   * Pluggable key/value store for the WalletConnect SDK's own state
+   * (IKeyValueStorage). Supply it to keep that state somewhere shared, such as
+   * Redis, instead of a local sqlite file. Omit it and the SDK uses `home`.
+   */
+  storage?: {
+    getKeys(): Promise<string[]>;
+    getEntries<T = unknown>(): Promise<[string, T][]>;
+    getItem<T = unknown>(key: string): Promise<T | undefined>;
+    setItem<T = unknown>(key: string, value: T): Promise<void>;
+    removeItem(key: string): Promise<void>;
+  };
 }
 
 export interface PairResult {

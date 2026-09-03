@@ -47,6 +47,7 @@ import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing
 import { registerHostedWrites } from "./tools/hosted-writes.js";
 import { WalletConnectHub, type WalletConnectHubLike } from "./wc/hub.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
+import { connectRedis, RedisKeyValueStorage, RedisWalletSessionStore } from "./wc/redis-store.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
@@ -475,12 +476,27 @@ async function main(): Promise<void> {
     dataDir: hosted.dataDir,
   });
 
-  const store = new FileWalletSessionStore(hosted.dataDir);
+  // Redis when a URL is configured, files otherwise. Both stores move together
+  // on purpose: our session record and the WalletConnect SDK's key material are
+  // two halves of the same thing, and splitting them across backends would give
+  // a replacement process the topic without the key to use it.
+  let store: WalletSessionStore;
+  let wcStorage: RedisKeyValueStorage | undefined;
+  if (hosted.REDIS_URL) {
+    const redis = await connectRedis(hosted.REDIS_URL);
+    store = new RedisWalletSessionStore(redis);
+    wcStorage = new RedisKeyValueStorage(redis);
+    log("info", "wallet sessions and WalletConnect state in redis");
+  } else {
+    store = new FileWalletSessionStore(hosted.dataDir);
+    log("info", `wallet sessions on disk under ${hosted.dataDir}`);
+  }
   const hub = await WalletConnectHub.init({
     projectId: cfg.WC_PROJECT_ID,
     home: hosted.dataDir,
     network: cfg.MOI_NETWORK,
     requestTimeoutMs: cfg.REQUEST_TIMEOUT_MS,
+    ...(wcStorage ? { storage: wcStorage } : {}),
   });
   const journal = new WriteJournal(hosted.dataDir);
   wireSessionDeleteReconciliation(hub, store);

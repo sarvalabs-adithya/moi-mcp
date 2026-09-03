@@ -263,10 +263,18 @@ export class WalletConnectHub implements WalletConnectHubLike {
  * Injected by tests with a fake.
  */
 async function defaultFactory(cfg: WcConfig): Promise<SignClientLike> {
-  const client = await SignClient.init({
-    projectId: cfg.projectId,
-    metadata: METADATA,
-    storageOptions: { database: `${cfg.home}/wc.db` },
-  });
+  // With a storage backend supplied, the SDK keeps its keychain, subscriptions
+  // and sessions there instead of a local sqlite file. That is what lets a
+  // replacement process serve a user who paired against an earlier one: our own
+  // session store alone would give it the topic but not the key behind it.
+  const client = await SignClient.init(
+    cfg.storage
+      ? { projectId: cfg.projectId, metadata: METADATA, storage: cfg.storage }
+      : {
+          projectId: cfg.projectId,
+          metadata: METADATA,
+          storageOptions: { database: `${cfg.home}/wc.db` },
+        },
+  );
   return client as unknown as SignClientLike;
 }

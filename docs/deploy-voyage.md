@@ -30,6 +30,24 @@ Five read tools: `moi_get_account`, `moi_get_asset`, `moi_get_interaction`,
 
 No other configuration exists.
 
+## Storage, for the write phase
+
+The read gateway stores nothing. The write phase keeps a wallet pairing per
+user, and it can hold that either on disk or in Redis.
+
+On disk is the default and needs nothing but a directory that survives a
+restart. That suits a VM: one box, one folder.
+
+Set `REDIS_URL` instead and both the wallet session records and the
+WalletConnect SDK's own state (its keychain, pairings and subscriptions) go to
+Redis. The process then keeps nothing locally, so it can be replaced freely,
+which is what containers need. Two conditions apply. Redis must have
+persistence enabled, because one run as a pure cache comes back empty and
+silently un-pairs everyone. And it must be treated as a secret store with auth
+and TLS: a session record carries the key that lets its holder raise a signing
+prompt on somebody's phone, so it should not share tenancy with cache
+workloads.
+
 ## Docker
 
     docker build -t moi-mcp-gateway .
