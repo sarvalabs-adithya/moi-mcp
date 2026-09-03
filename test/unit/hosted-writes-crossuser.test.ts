@@ -729,14 +729,15 @@ describe("cross-user write tools isolation", () => {
       expect(result.json.result.structuredContent.status).toBe("sent");
       const hash = result.json.result.structuredContent.hash as string;
 
-      // The entry reached a terminal-for-this-request "broadcast" state, is
-      // no longer pending, carries the real userId/kind, and its ixHash
-      // matches what the tool actually returned to the caller — not dropped
-      // by journal.update() silently ignoring the patch (a bug fixed
-      // alongside this wiring).
-      const pending = await journal.pending();
-      expect(pending).toHaveLength(1);
-      expect(pending[0]).toMatchObject({ userId: USER_A_ID, kind: "transfer", state: "broadcast", ixHash: hash });
+      // A clean broadcast is the end of the story for this request, so the
+      // entry finishes "confirmed" and is no longer pending: a restart must
+      // find nothing to reconcile. It carries the real userId/kind, and its
+      // ixHash matches what the tool returned to the caller rather than being
+      // dropped by journal.update() ignoring the patch (a bug fixed alongside
+      // this wiring).
+      expect(await journal.pending()).toHaveLength(0);
+      const entry = (await journal.current()).find((e) => e.kind === "transfer" && e.userId === USER_A_ID);
+      expect(entry).toMatchObject({ userId: USER_A_ID, kind: "transfer", state: "confirmed", ixHash: hash });
     });
 
     it("15. signing failure before approval journals 'failed', not 'orphaned' (nothing was ever approved)", async () => {
