@@ -24,6 +24,7 @@ import { createRequire } from "node:module";
 import { z } from "zod";
 
 import { getConfig, log } from "./config.js";
+import { brandAsset, brandServerInfo, landingHtml } from "./branding.js";
 import { messageOf } from "./errors.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { NETWORKS } from "./moi/provider.js";
@@ -42,8 +43,13 @@ const MAX_BODY_BYTES = 1_000_000;
  * Deliberately does not import tools/wallet or tools/writes: the write path
  * must be unreachable over HTTP by construction, not by configuration.
  */
-export function buildReadOnlyServer(): McpServer {
-  const server = new McpServer({ name: `${pkg.name}-http`, version: pkg.version });
+export function buildReadOnlyServer(opts: { publicUrl?: string } = {}): McpServer {
+  const server = new McpServer({
+    name: `${pkg.name}-http`,
+    title: "MOI",
+    version: pkg.version,
+    ...brandServerInfo(opts.publicUrl),
+  });
 
   server.registerTool(
     "ping",
@@ -115,6 +121,18 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
       configOk = false;
     }
     send(res, configOk ? 200 : 503, { ok: configOk, version: pkg.version, network, readOnly: true });
+    return;
+  }
+
+  const brand = brandAsset(url.pathname);
+  if (brand) {
+    res.writeHead(200, { "content-type": brand.type, "cache-control": "public, max-age=86400" });
+    res.end(brand.body);
+    return;
+  }
+  if (url.pathname === "/") {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(landingHtml("MOI MCP (read-only)", MCP_PATH));
     return;
   }
 

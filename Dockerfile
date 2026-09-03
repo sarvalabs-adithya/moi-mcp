@@ -27,6 +27,7 @@ ENV WC_PROJECT_ID=00000000000000000000000000000000
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY assets ./assets
 COPY package.json ./
 
 USER node

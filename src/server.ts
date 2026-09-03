@@ -40,6 +40,7 @@ import { messageOf, toMcpError } from "./errors.js";
 import { MoiError } from "./moi-error.js";
 import { ErrorCode } from "./schema.js";
 import { buildReadOnlyServer, MCP_PATH } from "./http.js";
+import { brandAsset, landingHtml } from "./branding.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { WriteJournal } from "./journal.js";
 import { NETWORKS } from "./moi/provider.js";
@@ -99,6 +100,8 @@ export interface HostedDeps {
   resolveUriMounted: boolean;
   /** One-arg wrapper over pairing/index.js's createPairingLink(userId, publicUrl) — the publicUrl is baked in by whoever builds this object. */
   createPairingLink(userId: string): { url: string; expiresAt: number };
+  /** Public origin, used to advertise absolute icon URLs in serverInfo. */
+  publicUrl?: string;
   /**
    * Start a WalletConnect pairing for this user and persist the session once
    * the phone approves. Returns the wc: URI to show them and when it dies.
@@ -385,7 +388,7 @@ export function buildHostedApp(deps: HostedDeps): Application {
 
     // Stateless: a fresh server and transport per request, exactly like
     // src/http.ts, so concurrent callers can never observe each other's state.
-    const server = buildReadOnlyServer();
+    const server = buildReadOnlyServer({ publicUrl: deps.publicUrl });
     registerWalletSurface(server, deps, auth ?? null);
     registerHostedWrites(server, deps, auth ?? null);
 
@@ -408,6 +411,18 @@ export function buildHostedApp(deps: HostedDeps): Application {
 
   app.post(MCP_PATH, handleMcp);
   app.get(MCP_PATH, handleMcp);
+
+  app.get("/", (_req, res) => {
+    res.status(200).type("html").send(landingHtml("MOI MCP", MCP_PATH));
+  });
+  app.get(["/favicon.ico", "/favicon.png", "/favicon.svg", "/logo.png", "/logo.svg", "/apple-touch-icon.png"], (req, res) => {
+    const brand = brandAsset(req.path);
+    if (!brand) {
+      res.status(404).end();
+      return;
+    }
+    res.status(200).set("cache-control", "public, max-age=86400").type(brand.type).send(brand.body);
+  });
   app.delete(MCP_PATH, handleMcp);
 
   app.use((_req, res) => {
@@ -575,6 +590,7 @@ async function main(): Promise<void> {
       resolveUriMounted: true,
       createPairingLink: (userId: string) => createPairingLinkFor(userId, hosted.PUBLIC_URL),
       startPairing,
+      publicUrl: hosted.PUBLIC_URL,
     }),
   );
 
