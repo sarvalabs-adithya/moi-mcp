@@ -22,7 +22,7 @@ import { ErrorCode, type Network } from "../schema.js";
 import type { AuthInfo } from "../auth/index.js";
 import type { WalletSessionStore } from "../wc/store.js";
 import type { WriteJournal } from "../journal.js";
-import { assertWillSucceed, senderFor } from "./writes.js";
+import { assertWillSucceed, senderFor } from "./write-core.js";
 import type { AgentKeyStore } from "../signing/agent-keys.js";
 import { MandateLedger, type MandateKey } from "../mandates/ledger.js";
 

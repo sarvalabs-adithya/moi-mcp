@@ -145,8 +145,26 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
   }
 }
 
+const PortSchema = z.coerce.number().int().positive().default(8787);
+
+/**
+ * Resolve PORT the same way config.ts treats every other env var: blank or
+ * whitespace-only falls back to the default, and anything else must parse as
+ * a positive integer or the process fails fast with a clear message instead
+ * of silently binding to an ephemeral port (empty string) or crashing inside
+ * `listen()` with a raw stack trace (non-numeric).
+ */
+export function resolvePort(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = (env["PORT"] ?? "").trim();
+  const parsed = PortSchema.safeParse(raw === "" ? undefined : raw);
+  if (!parsed.success) {
+    throw new Error(`Invalid PORT ${JSON.stringify(env["PORT"])} — expected a positive integer.`);
+  }
+  return parsed.data;
+}
+
 async function main(): Promise<void> {
-  const port = Number(process.env["PORT"] ?? 8787);
+  const port = resolvePort();
 
   // The read-only server needs no WalletConnect project id — it registers no
   // wallet tools — but the shared Config schema requires one. Satisfy it with

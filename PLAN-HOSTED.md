@@ -17,27 +17,45 @@ installed code; anything inferred is marked.
 
 ---
 
-## STATUS — 2026-09-02
+## STATUS — 2026-09-03
 
-The plan below predates the build. Where we actually are:
+Where the code actually is. Two branches are finished and unmerged, waiting
+on review and on tests only a human with a phone can run.
 
-- **DONE — the trunk** (merged to master, 275 tests green): OAuth 2.1 AS
-  (RFC 8414/9728/7591, PKCE S256-only, scope enforcement with 403 step-up),
-  the hosted entry `moi-mcp-hosted` (`src/server.ts`, lazy-auth 401 gate,
-  reads public), the one-time QR pairing page (`src/pairing/`), the per-user
-  session store (`src/wc/store.ts`), the write journal (`src/journal.ts`).
-  M2/M3/M4-page/M5-journal are therefore largely done; what remains of them
-  is live verification against real claude.ai.
-- **DONE — packaging**: default `mcp-server` bin fixed, MCPB one-click
-  bundle (`npm run bundle:mcpb`, ~24 MB), stranger-proof docs with verified
-  faucet/wallet/community links, `docs/deploy-vm.md` runbook.
-- **NEXT — branch A (per-tap writes hosted)**: per-user WC hub/demux
-  (`src/wc/hub.ts`) + wiring the four write tools through the caller's
-  session. **Branch B (mandates)**: cap+expiry engine at the same signer
-  seam. Build whichever spike proves out first; the trunk serves both.
-- **NEEDS A HUMAN**: spike A (two pairings, one phone), the mandate spike
-  (one Approve tap), claude.ai add-connector test loops, VM SSH + hostname,
-  npm scope decision, mcp-review email.
+**master** — the local server, packaged and publish-ready. Default `mcp-server`
+bin fixed (the documented `npx` install was broken), one-click `.mcpb` bundle
+(`npm run bundle:mcpb`, ~24 MB, no Node needed by the installer),
+stranger-proof docs with verified faucet/wallet/community links,
+`docs/deploy-vm.md`. An audit swept ten lenses and fixed six confirmed
+findings, including a QR-encode rejection that would have killed the hosted
+process for every user. 297 tests.
+
+**feat/multi-user-writes** — hosted writes, M1/M3/M5 in effect. A shared
+`WalletConnectHub` whose only signing method takes a topic; the four write
+tools registered per authenticated request, each resolving its topic from
+`store.get(auth.userId)`; a 15-case cross-user suite; the write journal wired
+through proposed/signed/broadcast with boot reconciliation. Review caught a
+missing journal (stranded approvals) and a missing `session_delete` handler;
+verifying by hand then caught a worse one: pairing ran on a *different*
+SignClient than signing, so no hosted write could ever have succeeded.
+352 tests.
+
+**feat/mandates-v2** — v2 delegated authority. Approve/Revoke/TransferFrom
+builders, per-user agent keys, the cap ledger, and
+`moi_transfer_under_mandate`. Review found two criticals (a commit failure
+undoing a spend that had already landed, and colliding spend ids) and one
+major (a crash stranding cap forever); all fixed, with recovery now decidable
+via a pre-broadcast marker and cap accounting that fails closed. 453 tests.
+
+**Needs a human.** Spike A (two pairings, one phone). The mandate spike — fund
+`0x00000000311c78cc4610ca0c4762ed3e16017f783ddc8bbbd26be65e00000000`
+on devnet and the full Approve → spend → over-cap-refused → Revoke loop runs
+live. claude.ai connector loops through a tunnel. VM hostname + SSH. The npm
+scope decision, the GitHub repo, and the mcp-review email.
+
+**Known gaps, deliberate.** `confirmMandateGrant` has no caller, so v2 can't
+run end to end until the phone-sign path feeds it. One pairing is in flight
+at a time process-wide. Neither branch is merged.
 
 ---
 

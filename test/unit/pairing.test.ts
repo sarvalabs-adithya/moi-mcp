@@ -5,6 +5,12 @@ import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createPairingModule } from "../../src/pairing/index.js";
+import QRCode from "qrcode";
+
+vi.mock("qrcode", async (importOriginal) => {
+  const actual = (await importOriginal()) as { default: typeof QRCode };
+  return { ...actual, default: { ...actual.default, toString: vi.fn(actual.default.toString) } };
+});
 
 const PUBLIC_URL = "https://connect.example.test";
 const URI = "wc:7f2a@2?relay-protocol=irn&symKey=deadbeef";
@@ -186,6 +192,24 @@ describe("pairing", () => {
       const body = await res.text();
       expect(body).not.toContain("relay socket exploded");
       expect(body).not.toContain("secret=abc123");
+      expect(body).toContain("Could not generate");
+    });
+
+    it("renders a clean 500 without leaking the underlying error when QR encoding throws", async () => {
+      const { createPairingLink, mountPairing } = createPairingModule(now);
+      const resolveUri = vi.fn().mockResolvedValue(URI);
+      vi.mocked(QRCode.toString).mockRejectedValueOnce(new Error("data too big for QR code"));
+      const app = express();
+      mountPairing(app, { resolveUri });
+      ({ server, base } = await listen(app));
+
+      const { url } = createPairingLink("alice", base);
+      const path = new URL(url).pathname;
+
+      const res = await fetch(`${base}${path}`);
+      expect(res.status).toBe(500);
+      const body = await res.text();
+      expect(body).not.toContain("data too big for QR code");
       expect(body).toContain("Could not generate");
     });
 

@@ -33,7 +33,7 @@ import { MandateLedger, type MandateKey } from "../mandates/ledger.js";
 import { MIN_AGENT_FUNDING_KMOI } from "../mandates/funding.js";
 import { mandateSignerForUser } from "../signing/mandate-signer.js";
 import { signAndBroadcast } from "../signing/index.js";
-import { assertWillSucceed, senderFor } from "./writes.js";
+import { assertWillSucceed, senderFor } from "./write-core.js";
 
 /**
  * Dependencies injected by registerMandateExecutor.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildReadOnlyServer, MCP_PATH } from "../../src/http.js";
+import { buildReadOnlyServer, MCP_PATH, resolvePort } from "../../src/http.js";
 
 describe("read-only HTTP server", () => {
   it("builds without a wallet or a project id", () => {
@@ -40,5 +40,29 @@ describe("read-only HTTP server", () => {
     expect(registered).not.toContain("moi_transfer");
     expect(registered).not.toContain("moi_create_asset");
     expect(registered).not.toContain("moi_connect_wallet");
+  });
+});
+
+describe("resolvePort", () => {
+  it("defaults to 8787 when PORT is unset", () => {
+    expect(resolvePort({})).toBe(8787);
+  });
+
+  it("falls back to the default when PORT is empty or whitespace", () => {
+    expect(resolvePort({ PORT: "" })).toBe(8787);
+    expect(resolvePort({ PORT: "   " })).toBe(8787);
+  });
+
+  it("parses a valid PORT", () => {
+    expect(resolvePort({ PORT: "3000" })).toBe(3000);
+  });
+
+  it("rejects a non-numeric PORT instead of producing NaN", () => {
+    expect(() => resolvePort({ PORT: "invalid" })).toThrow(/Invalid PORT/);
+  });
+
+  it("rejects zero and negative ports instead of silently binding an ephemeral one", () => {
+    expect(() => resolvePort({ PORT: "0" })).toThrow(/Invalid PORT/);
+    expect(() => resolvePort({ PORT: "-1" })).toThrow(/Invalid PORT/);
   });
 });
