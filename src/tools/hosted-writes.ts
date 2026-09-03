@@ -115,7 +115,26 @@ const WRITE_ANNOTATIONS = {
  *
  * Called only when auth is defined (within the auth-gated branch).
  */
-export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, auth: AuthInfo): void {
+export function registerHostedWrites(
+  server: McpServer,
+  deps: HostedWriteDeps,
+  auth: AuthInfo | null,
+): void {
+  // Registered even when the caller is anonymous, so the tools appear in
+  // tools/list and a model knows they exist. Hiding them looked safer but was
+  // worse: an unlisted tool is never called, so the 401 that prompts sign-in
+  // never fires, and the user is told this server is read-only. Calls are
+  // still gated — handleMcp answers 401 for these names before a handler runs,
+  // and requireAuth() below is the belt to that braces.
+  const requireAuth = (): AuthInfo => {
+    if (!auth) {
+      throw new MoiError(
+        ErrorCode.WALLET_NOT_CONNECTED,
+        "Sign in to this connector before proposing a transaction.",
+      );
+    }
+    return auth;
+  };
   server.registerTool(
     "moi_transfer",
     {
@@ -134,11 +153,11 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, auth);
+        const session = await loadSession(deps, requireAuth());
 
         const prepared = await prepareTransfer(session.address, { to, assetId, amount, memo });
 
-        await deps.journal.append({ id, userId: auth.userId, kind: "transfer", state: "proposed" });
+        await deps.journal.append({ id, userId: requireAuth().userId, kind: "transfer", state: "proposed" });
         proposed = true;
 
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
@@ -182,7 +201,7 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, auth);
+        const session = await loadSession(deps, requireAuth());
 
         const balance = await kmoiBalance(session.address);
         const prepared = await prepareCreateAsset(session.address, {
@@ -196,7 +215,7 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
           balance,
         });
 
-        await deps.journal.append({ id, userId: auth.userId, kind: "create_asset", state: "proposed" });
+        await deps.journal.append({ id, userId: requireAuth().userId, kind: "create_asset", state: "proposed" });
         proposed = true;
 
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
@@ -238,11 +257,11 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, auth);
+        const session = await loadSession(deps, requireAuth());
 
         const prepared = await prepareMint(session.address, { assetId, amount, to });
 
-        await deps.journal.append({ id, userId: auth.userId, kind: "mint", state: "proposed" });
+        await deps.journal.append({ id, userId: requireAuth().userId, kind: "mint", state: "proposed" });
         proposed = true;
 
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {
@@ -297,11 +316,11 @@ export function registerHostedWrites(server: McpServer, deps: HostedWriteDeps, a
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, auth);
+        const session = await loadSession(deps, requireAuth());
 
         const prepared = await prepareLogicInvoke(session.address, { logicId, routine, args });
 
-        await deps.journal.append({ id, userId: auth.userId, kind: "call_logic", state: "proposed" });
+        await deps.journal.append({ id, userId: requireAuth().userId, kind: "call_logic", state: "proposed" });
         proposed = true;
 
         const { ix_args, signatures } = await deps.hub.signInteractionFor(session.topic, prepared.ix, {

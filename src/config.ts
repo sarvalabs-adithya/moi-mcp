@@ -172,6 +172,15 @@ export function loadHostedConfig(env: NodeJS.ProcessEnv = process.env): HostedCo
     if (typeof value === "string" && value.trim() !== "") raw[key] = value;
   }
 
+  // Most hosts (Railway, Render, Fly, Heroku) inject the port to listen on as
+  // PORT and route traffic there. Without this the server would bind 8788 while
+  // the platform sent requests somewhere else, which presents as a deploy that
+  // builds fine and then answers nothing. An explicit HOSTED_PORT still wins.
+  if (raw["HOSTED_PORT"] === undefined) {
+    const injected = (env["PORT"] ?? "").trim();
+    if (injected !== "") raw["HOSTED_PORT"] = injected;
+  }
+
   const parsed = HostedConfigSchema.safeParse(raw);
   if (!parsed.success) {
     const detail = parsed.error.issues

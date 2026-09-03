@@ -37,6 +37,8 @@ import { z } from "zod";
 import { mountAuth, type AuthHandle, type AuthInfo } from "./auth/index.js";
 import { getConfig, getHostedConfig, log } from "./config.js";
 import { messageOf, toMcpError } from "./errors.js";
+import { MoiError } from "./moi-error.js";
+import { ErrorCode } from "./schema.js";
 import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { WriteJournal } from "./journal.js";
@@ -156,7 +158,18 @@ const WALLET_STATUS_OUTPUT = {
  * request's ephemeral server. Never called for an unauthenticated request —
  * buildHostedApp only reaches this after deps.authenticate(req) succeeded.
  */
-function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthInfo): void {
+function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthInfo | null): void {
+  // See registerHostedWrites: listed for everyone so they are discoverable,
+  // gated on call by handleMcp's 401.
+  const requireAuth = (): AuthInfo => {
+    if (!auth) {
+      throw new MoiError(
+        ErrorCode.WALLET_NOT_CONNECTED,
+        "Sign in to this connector before connecting a wallet.",
+      );
+    }
+    return auth;
+  };
   server.registerTool(
     "moi_connect_wallet",
     {
@@ -175,7 +188,7 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
         // this response lands straight in the chat transcript. The link opens
         // a page (src/pairing/index.ts) that is the only place the URI is
         // ever resolved and rendered.
-        const { url, expiresAt } = deps.createPairingLink(auth.userId);
+        const { url, expiresAt } = deps.createPairingLink(requireAuth().userId);
         const structuredContent = {
           url,
           expiresAt,
@@ -202,7 +215,7 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
     },
     async () => {
       try {
-        const record = await deps.store.get(auth.userId);
+        const record = await deps.store.get(requireAuth().userId);
         const structuredContent = record
           ? {
               connected: true,
@@ -236,7 +249,7 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
         // phone keeps showing the pairing as active until it expires on its
         // own. Fine for the trunk; needs the shared hub (PLAN-HOSTED.md
         // src/wc/hub.ts) to do properly, since only that holds the SignClient.
-        await deps.store.delete(auth.userId);
+        await deps.store.delete(requireAuth().userId);
         return { content: [{ type: "text" as const, text: "Wallet disconnected." }] };
       } catch (err) {
         throw toMcpError(err);
@@ -316,14 +329,10 @@ export function buildHostedApp(deps: HostedDeps): Application {
     }
 
     // Stateless: a fresh server and transport per request, exactly like
-    // src/http.ts, so concurrent callers can never observe each other's
-    // state — and so an authenticated request's wallet tools never leak into
-    // an unauthenticated one's tool list.
+    // src/http.ts, so concurrent callers can never observe each other's state.
     const server = buildReadOnlyServer();
-    if (auth) {
-      registerWalletSurface(server, deps, auth);
-      registerHostedWrites(server, deps, auth);
-    }
+    registerWalletSurface(server, deps, auth ?? null);
+    registerHostedWrites(server, deps, auth ?? null);
 
     const transport = withModernSchemaDialect(
       new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }),
