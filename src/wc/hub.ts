@@ -52,6 +52,32 @@ export interface WalletConnectHubLike {
   close(): Promise<void>;
 }
 
+/**
+ * Find the CAIP-2 chain a settled session is on.
+ *
+ * MOI Wallet keys the namespaces map inconsistently: sometimes `moi` with a
+ * `chains` list, sometimes the chain id itself (`moi:14`) as the key. Accounts
+ * are CAIP-10 (`moi:14:0xabc`), so they carry it as well. Try each, most
+ * explicit first.
+ */
+export function chainIdFromSession(raw: unknown): string | undefined {
+  const namespaces =
+    (raw as { namespaces?: Record<string, { chains?: string[]; accounts?: string[] }> } | undefined)
+      ?.namespaces ?? {};
+  for (const [key, value] of Object.entries(namespaces)) {
+    if (key !== WC_NAMESPACE && !key.startsWith(`${WC_NAMESPACE}:`)) continue;
+    if (key.includes(":")) return key;
+    const chain = value?.chains?.find((c) => c.startsWith(`${WC_NAMESPACE}:`));
+    if (chain) return chain;
+    const account = value?.accounts?.find((a) => a.startsWith(`${WC_NAMESPACE}:`));
+    if (account) {
+      const parts = account.split(":");
+      if (parts.length >= 3) return `${parts[0]}:${parts[1]}`;
+    }
+  }
+  return undefined;
+}
+
 /** Minimal metadata for WalletConnect initialization. */
 const METADATA = {
   name: "MOI MCP Server",
@@ -74,7 +100,11 @@ export class WalletConnectHub implements WalletConnectHubLike {
    * WalletConnectHub.init() in main() — that invariant is process wiring,
    * not something the type system enforces here.
    */
-  constructor(private readonly signClient: SignClientLike) {}
+  constructor(
+    private readonly signClient: SignClientLike,
+    /** Used only when a settled session carries no recognisable chain. */
+    private readonly defaultChainId?: string,
+  ) {}
 
   /**
    * Constructs and initializes the single WalletConnectHub for this process.
@@ -82,7 +112,7 @@ export class WalletConnectHub implements WalletConnectHubLike {
    */
   static async init(config: WcConfig): Promise<WalletConnectHub> {
     const client = await defaultFactory(config);
-    return new WalletConnectHub(client);
+    return new WalletConnectHub(client, config.chainId ?? NETWORKS[config.network].caip2);
   }
 
   /**
@@ -195,14 +225,15 @@ export class WalletConnectHub implements WalletConnectHubLike {
       );
     }
 
-    // Extract chainId from the native session. It was stored by the relay
-    // when the wallet approved the pairing, so trust it.
-    const session = nativeSession as { topic?: string; chainId?: string; [k: string]: unknown };
-    const chainId = session.chainId;
+    // A settled WalletConnect session has no chainId field; the chain lives
+    // in its namespaces. Reading a field that does not exist is how every
+    // hosted signing request failed while every test (whose fakes had the
+    // field) passed.
+    const chainId = chainIdFromSession(nativeSession) ?? this.defaultChainId;
     if (!chainId) {
       throw new MoiError(
         ErrorCode.RELAY_UNAVAILABLE,
-        "Native WalletConnect session has no chainId. This should not happen.",
+        "Could not tell which chain this wallet session is on. Pair again with moi_connect_wallet.",
       );
     }
 

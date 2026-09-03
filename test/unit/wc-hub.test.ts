@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { MoiError } from "../../src/moi-error.js";
 import { ErrorCode } from "../../src/schema.js";
-import { WalletConnectHub, type HubSignResult, type SignInteractionOpts } from "../../src/wc/hub.js";
+import { WalletConnectHub, chainIdFromSession, type HubSignResult, type SignInteractionOpts } from "../../src/wc/hub.js";
 import type { SignClientLike, WcConfig } from "../../src/wc/client.js";
 import type { UnsignedInteraction } from "../../src/moi/ix-builder.js";
 
@@ -27,6 +27,9 @@ function fakeSignClient(overrides: Partial<SignClientLike> = {}): SignClientLike
  * Create a minimal WcConfig for tests. Network/projectId don't matter;
  * the hub doesn't use them (only SignClient factory does).
  */
+/** What a settled MOI Wallet session actually looks like: no chainId field. */
+const REAL_NS = { moi: { chains: ["moi:14"], accounts: ["moi:14:0xaaa"], methods: [], events: [] } };
+
 function testConfig(): WcConfig {
   return {
     projectId: "test-project",
@@ -90,7 +93,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14", expiry: Math.floor(Date.now() / 1000) + 3600 }
+              ? { topic: "topic-a", namespaces: REAL_NS, expiry: Math.floor(Date.now() / 1000) + 3600 }
               : undefined,
           ),
         },
@@ -159,7 +162,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -182,7 +185,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -206,7 +209,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -231,7 +234,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -252,7 +255,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -274,7 +277,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -307,9 +310,9 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a", "topic-b"],
           get: vi.fn((topic: string) => {
             if (topic === "topic-a")
-              return { topic: "topic-a", chainId: "moi:14", account: "0xaaa" };
+              return { topic: "topic-a", namespaces: REAL_NS, account: "0xaaa" };
             if (topic === "topic-b")
-              return { topic: "topic-b", chainId: "moi:14", account: "0xbbb" };
+              return { topic: "topic-b", namespaces: REAL_NS, account: "0xbbb" };
             return undefined;
           }),
         },
@@ -353,7 +356,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-x"],
           get: vi.fn((topic: string) =>
             topic === "topic-x"
-              ? { topic: "topic-x", chainId: "moi:14" }
+              ? { topic: "topic-x", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -574,13 +577,13 @@ describe("WalletConnectHub", () => {
   });
 
   describe("error handling edge cases", () => {
-    it("handles session.get returning a session with missing chainId", async () => {
+    it("refuses a session whose chain cannot be determined and no default is set", async () => {
       const fakeClient = fakeSignClient({
         session: {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a" } // Missing chainId
+              ? { topic: "topic-a" } // no namespaces, so no chain to derive
               : undefined,
           ),
         },
@@ -591,7 +594,7 @@ describe("WalletConnectHub", () => {
 
       await expect(hub.signInteractionFor("topic-a", ix)).rejects.toMatchObject({
         code: ErrorCode.RELAY_UNAVAILABLE,
-        message: expect.stringContaining("chainId"),
+        message: expect.stringContaining("chain"),
       });
     });
 
@@ -601,7 +604,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -625,7 +628,7 @@ describe("WalletConnectHub", () => {
           keys: ["topic-a"],
           get: vi.fn((topic: string) =>
             topic === "topic-a"
-              ? { topic: "topic-a", chainId: "moi:14" }
+              ? { topic: "topic-a", namespaces: REAL_NS }
               : undefined,
           ),
         },
@@ -650,10 +653,9 @@ describe("WalletConnectHub", () => {
             topic === "wc:xyz"
               ? {
                   topic: "wc:xyz",
-                  chainId: "moi:14",
                   expiry: Math.floor(Date.now() / 1000) + 3600,
                   peer: { metadata: { name: "MOI Wallet" } },
-                  namespace: { moi: { accounts: ["moi:14:0xaccount"] } },
+                  namespaces: { moi: { accounts: ["moi:14:0xaccount"] } },
                 }
               : undefined,
           ),
@@ -712,7 +714,7 @@ describe("WalletConnectHub pairing and signing share one client", () => {
         uri: "wc:real-looking-uri",
         approval: async () => {
           // The relay records the approved session on THIS client.
-          sessions.set(approved.topic, { ...approved, chainId: "moi:14" });
+          sessions.set(approved.topic, approved);
           return approved;
         },
       })),
@@ -739,5 +741,63 @@ describe("WalletConnectHub pairing and signing share one client", () => {
     await expect(hub.signInteractionFor("topic-from-elsewhere", testInteraction())).rejects.toThrow(
       MoiError,
     );
+  });
+});
+
+
+/**
+ * The chain must come from the session's namespaces. A real session has no
+ * chainId field, and a fake that supplied one let a broken path pass 375
+ * tests while a real phone got "session has no chainId".
+ */
+describe("chainIdFromSession", () => {
+  it("reads a `moi` namespace with a chains list", () => {
+    expect(chainIdFromSession({ namespaces: { moi: { chains: ["moi:14"], accounts: [] } } })).toBe("moi:14");
+  });
+
+  it("reads a namespace keyed by the chain id itself, as MOI Wallet sometimes sends", () => {
+    expect(chainIdFromSession({ namespaces: { "moi:14": { accounts: ["moi:14:0xabc"] } } })).toBe("moi:14");
+  });
+
+  it("falls back to the CAIP-10 account when there is no chains list", () => {
+    expect(chainIdFromSession({ namespaces: { moi: { accounts: ["moi:14:0xabc"] } } })).toBe("moi:14");
+  });
+
+  it("ignores unrelated namespaces and gives up cleanly", () => {
+    expect(chainIdFromSession({ namespaces: { eip155: { chains: ["eip155:1"] } } })).toBeUndefined();
+    expect(chainIdFromSession({})).toBeUndefined();
+    expect(chainIdFromSession(undefined)).toBeUndefined();
+  });
+});
+
+describe("signing derives the chain from a real-shaped session", () => {
+  for (const [label, namespaces] of [
+    ["namespace keyed moi", { moi: { chains: ["moi:14"], accounts: ["moi:14:0xaaa"] } }],
+    ["namespace keyed moi:14", { "moi:14": { accounts: ["moi:14:0xaaa"] } }],
+  ] as const) {
+    it(`sends chainId moi:14 when the ${label}`, async () => {
+      const client = fakeSignClient({
+        session: { keys: ["t"], get: (topic: string) => (topic === "t" ? { topic: "t", namespaces } : undefined) },
+      } as Partial<SignClientLike>);
+      const hub = new WalletConnectHub(client);
+      await hub.signInteractionFor("t", testInteraction());
+      expect(client.request).toHaveBeenCalledWith(expect.objectContaining({ topic: "t", chainId: "moi:14" }));
+    });
+  }
+
+  it("uses the configured default only when the session says nothing", async () => {
+    const client = fakeSignClient({
+      session: { keys: ["t"], get: () => ({ topic: "t", namespaces: {} }) },
+    } as Partial<SignClientLike>);
+    const hub = new WalletConnectHub(client, "moi:14");
+    await hub.signInteractionFor("t", testInteraction());
+    expect(client.request).toHaveBeenCalledWith(expect.objectContaining({ chainId: "moi:14" }));
+  });
+
+  it("refuses rather than guessing when there is no chain and no default", async () => {
+    const client = fakeSignClient({
+      session: { keys: ["t"], get: () => ({ topic: "t", namespaces: {} }) },
+    } as Partial<SignClientLike>);
+    await expect(new WalletConnectHub(client).signInteractionFor("t", testInteraction())).rejects.toThrow(MoiError);
   });
 });
