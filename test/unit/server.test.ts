@@ -9,8 +9,10 @@ import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { AuthInfo } from "../../src/auth/index.js";
+import { WriteJournal } from "../../src/journal.js";
 import { TOOLS } from "../../src/schema.js";
 import { buildHostedApp, GATED, type HostedDeps } from "../../src/server.js";
+import type { WalletConnectHubLike } from "../../src/wc/hub.js";
 import type { StoredWalletSession, WalletSessionStore } from "../../src/wc/store.js";
 import { applyEnv, restoreEnv, tempHome } from "../helpers/harness.js";
 import { ACCOUNT, startMockNode, type MockNode } from "../helpers/mock-node.js";
@@ -67,11 +69,33 @@ class FakeStore implements WalletSessionStore {
   }
 }
 
+/**
+ * No test in this file exercises a write tool through to signing (those live
+ * in hosted-writes.test.ts / hosted-writes-crossuser.test.ts) — this fake
+ * only needs to satisfy HostedDeps.hub's type so registerHostedWrites can be
+ * wired up for every authenticated request, same as production.
+ */
+class FakeHub implements WalletConnectHubLike {
+  async pair(): Promise<never> {
+    throw new Error("FakeHub does not pair; these tests drive signing only");
+  }
+
+  async signInteractionFor(): Promise<{ ix_args: string; signatures: string }> {
+    throw new Error("FakeHub.signInteractionFor is not exercised by this test file");
+  }
+  onSessionDelete(): () => void {
+    return () => {};
+  }
+  async close(): Promise<void> {}
+}
+
 function makeDeps(store: WalletSessionStore): HostedDeps {
   return {
     authenticate: fakeAuthenticate,
     challengeHeader: fakeChallengeHeader,
     store,
+    hub: new FakeHub(),
+    journal: new WriteJournal(tempHome()),
     resolveUriMounted: true,
     createPairingLink: (userId) => ({
       url: `https://example.test/pair/${userId}`,

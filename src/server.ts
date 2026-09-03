@@ -28,7 +28,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express, { type Application, type Request, type Response } from "express";
-import { mkdirSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -39,9 +39,11 @@ import { getConfig, getHostedConfig, log } from "./config.js";
 import { messageOf, toMcpError } from "./errors.js";
 import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
+import { WriteJournal } from "./journal.js";
 import { NETWORKS } from "./moi/provider.js";
 import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing } from "./pairing/index.js";
-import { WalletConnectClient } from "./wc/client.js";
+import { registerHostedWrites } from "./tools/hosted-writes.js";
+import { WalletConnectHub, type WalletConnectHubLike } from "./wc/hub.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -86,6 +88,8 @@ export interface HostedDeps {
   authenticate: AuthHandle["authenticate"];
   challengeHeader: AuthHandle["challengeHeader"];
   store: WalletSessionStore;
+  hub: WalletConnectHubLike;
+  journal: WriteJournal;
   /** Whether mountPairing(app, ...) was called on the outer app main() builds this onto. Surfaced at /health only — this app never serves /pair itself. */
   resolveUriMounted: boolean;
   /** One-arg wrapper over pairing/index.js's createPairingLink(userId, publicUrl) — the publicUrl is baked in by whoever builds this object. */
@@ -316,7 +320,10 @@ export function buildHostedApp(deps: HostedDeps): Application {
     // state — and so an authenticated request's wallet tools never leak into
     // an unauthenticated one's tool list.
     const server = buildReadOnlyServer();
-    if (auth) registerWalletSurface(server, deps, auth);
+    if (auth) {
+      registerWalletSurface(server, deps, auth);
+      registerHostedWrites(server, deps, auth);
+    }
 
     const transport = withModernSchemaDialect(
       new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }),
@@ -357,41 +364,24 @@ export function buildHostedApp(deps: HostedDeps): Application {
  * phone approves, in the background — persist the paired session and mark
  * the pairing link consumed.
  *
- * ONE WalletConnectClient for the whole process, so ONE pairing is in flight
- * at a time across every user. That is the same limitation PLAN-HOSTED.md §1
- * notes for the trunk (a real fix is src/wc/hub.ts, a shared SignClient keyed
- * by topic) — acceptable here, not fixed here.
+ * Pairing runs on the hub's SignClient, and that is load-bearing rather than
+ * hygiene: signInteractionFor() resolves a topic against its own client's
+ * session store, so a session paired on any other client is invisible to the
+ * signer and every write for that user would fail "session no longer valid"
+ * forever.
  *
- * WalletConnectClient is single-user code (src/wc/client.ts) that always
- * persists its OWN last-approved session to one un-keyed `<home>/session.json`
- * (src/wc/session.ts), with no notion of which user paired. `home` here must
- * therefore NEVER be `hosted.dataDir` — that is the multi-tenant root the
- * per-user FileWalletSessionStore (`store`, keyed by sha256(userId), see
- * wc/store.ts) also lives under, and letting the two coexist there invites a
- * future caller to assume `wc`'s own session accessors (session(),
- * currentSession(), disconnect()) are per-user when they are actually
- * last-writer-wins across every user on this process. Point it at a
- * dedicated, non-authoritative scratch directory instead: `store` (not `wc`)
- * is the only thing any tool should ever read a specific user's session from.
- * A future write-tool milestone resolving a session for `auth.userId` must
- * load it from `store`, not from this shared client.
+ * The approved session is also written to `store` (FileWalletSessionStore,
+ * keyed by sha256(userId)). That is the only place a tool may learn a
+ * specific user's topic — the relay client itself has no notion of which
+ * user paired, so asking it would give whoever paired most recently.
  */
 function makeResolveUri(
   cfg: ReturnType<typeof getConfig>,
-  hosted: ReturnType<typeof getHostedConfig>,
+  hub: WalletConnectHubLike,
   store: WalletSessionStore,
 ): (userId: string) => Promise<string> {
-  const wcHome = join(hosted.dataDir, "wc-relay-scratch");
-  mkdirSync(wcHome, { recursive: true, mode: 0o700 });
-  const wc = new WalletConnectClient({
-    projectId: cfg.WC_PROJECT_ID,
-    home: wcHome,
-    network: cfg.MOI_NETWORK,
-    requestTimeoutMs: hosted.HOSTED_TIMEOUT_MS,
-  });
-
   return async (userId: string): Promise<string> => {
-    const { uri, approval } = await wc.pair();
+    const { uri, approval } = await hub.pair(cfg.MOI_NETWORK);
 
     // Do not block the pairing page on the phone tap; it already polls via
     // its own cached-promise mechanism (src/pairing/index.ts handleGet).
@@ -423,6 +413,49 @@ function makeResolveUri(
   };
 }
 
+/**
+ * Keep `store` honest when a phone unpairs out-of-band: the relay's
+ * session_delete event carries only a topic, resolved back to a userId via
+ * `store.findByTopic` (never a caller-supplied identity — this is
+ * server-to-server relay wiring, not a tool call).
+ *
+ * Exported so a test can assert the exact production wiring reconciles the
+ * store, rather than only a copy of this logic re-registered inside the test
+ * itself.
+ */
+export function wireSessionDeleteReconciliation(hub: WalletConnectHubLike, store: WalletSessionStore): void {
+  hub.onSessionDelete((topic) => {
+    void (async () => {
+      try {
+        const rec = await store.findByTopic(topic);
+        if (rec) await store.delete(rec.userId);
+      } catch (err) {
+        log("error", `failed to reconcile session_delete for a topic: ${messageOf(err)}`);
+      }
+    })();
+  });
+}
+
+/**
+ * M5: reconcile any write left pending (proposed/signed/broadcast) by a
+ * process restart between phone-sign and broadcast. This process never
+ * persists the signed payload (ix_args/signatures) outside the request that
+ * produced it, so a strand cannot be safely re-broadcast from the journal
+ * alone — reconciling means reporting it honestly (loudly, once) and marking
+ * it terminal so the next status check reflects reality instead of a tool
+ * silently retrying against a stale nonce.
+ */
+async function reconcileJournalOnBoot(journal: WriteJournal): Promise<void> {
+  await journal.reconcileOnBoot(async (entry) => {
+    log(
+      "error",
+      `journal: interaction ${entry.id} (${entry.kind}, user ${entry.userId}) was left in state ` +
+        `'${entry.state}' by a previous process exit and cannot be safely re-broadcast; marking orphaned.`,
+    );
+    await journal.update(entry.id, "orphaned", { detail: `reconciled on boot from state '${entry.state}'` });
+  });
+}
+
 async function main(): Promise<void> {
   const cfg = getConfig(); // loads dotenv as a side effect; call before getHostedConfig()
   const hosted = getHostedConfig();
@@ -434,13 +467,25 @@ async function main(): Promise<void> {
   });
 
   const store = new FileWalletSessionStore(hosted.dataDir);
-  mountPairing(app, { resolveUri: makeResolveUri(cfg, hosted, store) });
+  const hub = await WalletConnectHub.init({
+    projectId: cfg.WC_PROJECT_ID,
+    home: hosted.dataDir,
+    network: cfg.MOI_NETWORK,
+    requestTimeoutMs: cfg.REQUEST_TIMEOUT_MS,
+  });
+  const journal = new WriteJournal(hosted.dataDir);
+  wireSessionDeleteReconciliation(hub, store);
+  await reconcileJournalOnBoot(journal);
+
+  mountPairing(app, { resolveUri: makeResolveUri(cfg, hub, store) });
 
   app.use(
     buildHostedApp({
       authenticate,
       challengeHeader,
       store,
+      hub,
+      journal,
       resolveUriMounted: true,
       createPairingLink: (userId: string) => createPairingLinkFor(userId, hosted.PUBLIC_URL),
     }),
