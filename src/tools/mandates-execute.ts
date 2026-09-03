@@ -19,7 +19,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { getConfig } from "../config.js";
+import { getConfig, log } from "../config.js";
 import { toMcpError } from "../errors.js";
 import { isMoiError, MoiError } from "../moi-error.js";
 import { buildTransferFrom, type MandateSpendParams } from "../moi/mandates.js";
@@ -209,6 +209,9 @@ export function registerMandateExecutor(
     status: z.literal("confirmed"),
     hash: z.string(),
     remainingCap: z.string(),
+    // Present only when the transfer reached the chain but its journal write
+    // failed; the cap stays counted, and this says the ledger is behind.
+    ledgerWarning: z.string().optional(),
   });
 
   const ExecuteOutputShape = z.union([ConfirmedOutput, RefusalOutput]);
@@ -329,29 +332,23 @@ export function registerMandateExecutor(
         }
 
         // PHASE 5+6: Sign (agent key) + broadcast.
+        //
+        // Only this narrow block may release the reservation. Once sendInteraction
+        // returns a hash the transfer exists on chain, so a later failure (notably
+        // the commit journal write) must never be reported as "nothing happened":
+        // the caller would retry in good faith and spend the cap a second time for
+        // real. Past this point we keep the reservation and return the hash.
+        let hash: string;
         try {
           const mandateSigner = await mandateSignerForUser(deps.dataDir, auth.userId);
-          const hash = await signAndBroadcast(
+          hash = await signAndBroadcast(
             mandateSigner,
             deps.provider,
             ix,
             `Mandate transfer ${amountStr} ${asset.symbol || assetId} to ${beneficiary}`,
           );
-
-          // PHASE 8a: Commit on success.
-          await deps.ledger.commit(reservation.journalEntryId);
-
-          const result: z.infer<typeof ConfirmedOutput> = {
-            status: "confirmed",
-            hash,
-            remainingCap: reservation.remainingAfter.toString(),
-          };
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-            structuredContent: result,
-          };
         } catch (e) {
-          // PHASE 8b: Release on sign/broadcast failure.
+          // PHASE 8b: Release on sign/broadcast failure — nothing reached the chain.
           await deps.ledger.release(reservation.journalEntryId);
 
           const reason: z.infer<typeof RefusalOutput>["reason"] = String(e).includes("sign")
@@ -368,6 +365,33 @@ export function registerMandateExecutor(
             structuredContent: result,
           };
         }
+
+        // PHASE 8a: Broadcast succeeded. Commit the spend. If the journal write
+        // fails the money still moved, so we keep the reservation counted (fail
+        // closed against the cap) and still hand back the hash.
+        let committed = true;
+        try {
+          await deps.ledger.commit(reservation.journalEntryId, { ixHash: hash });
+        } catch (e) {
+          committed = false;
+          log(
+            "error",
+            `mandate spend ${hash} broadcast but its journal commit failed: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          );
+        }
+
+        const result: z.infer<typeof ConfirmedOutput> = {
+          status: "confirmed",
+          hash,
+          remainingCap: reservation.remainingAfter.toString(),
+          ...(committed ? {} : { ledgerWarning: "spend broadcast but not journaled" }),
+        };
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+          structuredContent: result,
+        };
       } catch (err) {
         if (isMoiError(err)) {
           const result: z.infer<typeof RefusalOutput> = {

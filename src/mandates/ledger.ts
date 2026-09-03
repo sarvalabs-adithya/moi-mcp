@@ -57,6 +57,7 @@ export class MandateLedger {
    * still collide on a millisecond-resolution timestamp alone.
    */
   private grantSeq = 0;
+  private spendSeq = 0;
 
   constructor(private readonly journal: WriteJournal, dataDir: string) {
     this.journalPath = join(dataDir, "journal.jsonl");
@@ -255,7 +256,10 @@ export class MandateLedger {
     }
 
     // Synchronously append the reservation
-    const id = this.makeEntryId("mandate_spend", key, Date.now().toString());
+    // Same reason grants carry a counter: two reserves for one key inside a single
+    // millisecond would otherwise share an id, and a later commit/release of one
+    // would silently retarget the other.
+    const id = this.makeEntryId("mandate_spend", key, `${Date.now()}-${this.spendSeq++}`);
     const detail = JSON.stringify({
       assetId: key.assetId,
       benefactor: key.benefactor,
@@ -280,8 +284,8 @@ export class MandateLedger {
    * Marks a reserved spend as committed (moves from proposed to confirmed).
    * No-op on the arithmetic — the proposed entry already counted.
    */
-  async commit(journalEntryId: string): Promise<void> {
-    await this.journal.update(journalEntryId, "confirmed");
+  async commit(journalEntryId: string, patch?: Record<string, unknown>): Promise<void> {
+    await this.journal.update(journalEntryId, "confirmed", patch);
   }
 
   /**
