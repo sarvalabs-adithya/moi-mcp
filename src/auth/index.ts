@@ -46,6 +46,16 @@ export function mountAuth(app: Express, opts: MountAuthOptions): AuthHandle {
   const cookieSecret = loadOrCreateCookieSecret(join(opts.dataDir, "auth", "cookie-secret"));
   const clientStore = new ClientStore(opts.dataDir);
   const tokenStore = new TokenStore(opts.dataDir);
+  // Expired tokens are deleted lazily on presentation; sweep the rest so an
+  // abandoned sign-in does not leave a file behind for good.
+  const sweep = setInterval(() => {
+    try {
+      tokenStore.sweepExpired();
+    } catch {
+      // A failed sweep is not worth surfacing; the next one will try again.
+    }
+  }, 15 * 60_000);
+  sweep.unref();
   const codeStore = new CodeStore();
   const cookieSecure = publicUrl.startsWith("https://");
 

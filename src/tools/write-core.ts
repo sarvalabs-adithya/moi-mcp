@@ -150,6 +150,7 @@ export const WriteOutputShape = {
   status: z.enum(["sent", "rejected", "error"]),
   hash: z.string().optional(),
   explorerUrl: z.string().optional(),
+  summary: z.string().optional(),
   reason: z.enum(["user_rejected", "timeout", "network_mismatch", "wallet_disconnected"]).optional(),
   message: z.string().optional(),
   code: z.string().optional(),

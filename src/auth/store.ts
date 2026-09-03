@@ -5,7 +5,7 @@
  * a process restart anyway (the pending consent screen does not either).
  */
 
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync, readdirSync} from "node:fs";
 import { join } from "node:path";
 
 import type { PendingCode, StoredClientRecord, StoredTokenRecord } from "./types.js";
@@ -80,6 +80,31 @@ export class TokenStore {
 
   delete(hash: string): void {
     deleteQuiet(this.path(hash));
+  }
+
+  /**
+   * Remove every token file past its expiry. Deletion is otherwise lazy,
+   * happening only when an expired token is presented, so a token that is
+   * never presented again would sit on disk forever. Returns how many went.
+   */
+  sweepExpired(nowSeconds: number = Math.floor(Date.now() / 1000)): number {
+    let removed = 0;
+    for (const name of readdirSync(this.dir)) {
+      if (!name.endsWith(".json")) continue;
+      // A file we cannot parse is skipped, never fatal: one corrupt token
+      // must not stop every other expired one from being cleaned up.
+      let record: StoredTokenRecord | undefined;
+      try {
+        record = readJsonSafe<StoredTokenRecord>(join(this.dir, name));
+      } catch {
+        continue;
+      }
+      if (record && typeof record.expiresAt === "number" && record.expiresAt <= nowSeconds) {
+        deleteQuiet(join(this.dir, name));
+        removed += 1;
+      }
+    }
+    return removed;
   }
 }
 

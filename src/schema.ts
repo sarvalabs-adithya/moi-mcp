@@ -192,6 +192,8 @@ export const WriteResult = z.discriminatedUnion("status", [
     status: z.literal("sent"),
     hash: InteractionHash,
     explorerUrl: z.string().url(),
+    /** The plain-language sentence the user was asked to approve. */
+    summary: z.string().optional(),
   }),
   z.object({
     status: z.literal("rejected"),

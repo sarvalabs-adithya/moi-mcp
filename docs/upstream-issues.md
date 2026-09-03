@@ -193,3 +193,25 @@ manifest by the obvious word gets an empty list — we did.
 The node returns `asset_deeds` on `moi.AccountState` where the SDK type says
 `asset_approvals`, and returns no `nonce` (issue 2). Two more places the types
 and the wire disagree.
+
+
+## 3. `moi.signInteraction` has no way to show the user what they are signing
+
+**Severity: limits how informed a phone approval can be.**
+
+Every write tool composes a plain sentence ("Transfer 50 KMOI to 0x…") for the
+user to approve. There is nowhere to put it. `moi.signInteraction` takes only
+the interaction (`params: [address, ix]` in `sarvalabs/wallet-connect-dapp`,
+`[ixRequest]` in the extension's SPECIFICATION.md), and the interaction format
+has no memo or label field. The wallet therefore renders whatever it can decode
+from the raw operations. For a transfer that is legible; for an asset create,
+a mint, or a logic call with encoded calldata, it is much less so.
+
+**Workaround, and what the server ships:** the write tools instruct the model
+to state amount, asset, and recipient and get an explicit yes *before* the
+call, and echo that sentence back with the hash. The chat is the approval
+screen the user can actually read; the phone tap confirms it.
+
+**Wallet-side fix:** accept an optional second param (or a `meta.description`
+like the `ix_args` style already models for `sendInteractions`) and render it
+above the decoded operations.

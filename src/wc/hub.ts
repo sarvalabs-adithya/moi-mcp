@@ -79,11 +79,13 @@ export function chainIdFromSession(raw: unknown): string | undefined {
 }
 
 /** Minimal metadata for WalletConnect initialization. */
+// This is what MOI Wallet shows on the pairing screen: the one label about
+// this server a user ever sees on their phone. Keep it recognisable.
 const METADATA = {
-  name: "MOI MCP Server",
-  description: "Lets an AI agent read MOI chain state and propose interactions for you to approve.",
+  name: "MOI MCP",
+  description: "Talk to MOI from your AI assistant. It proposes; you approve every transaction here.",
   url: "https://moi.technology",
-  icons: ["https://moi.technology/favicon.ico"],
+  icons: ["https://moi.technology/brand/logos/SVG/default-light.svg"],
 };
 
 /**
@@ -207,7 +209,9 @@ export class WalletConnectHub implements WalletConnectHubLike {
    *
    * @param topic - WalletConnect session topic, sourced only from StoredWalletSession.topic
    * @param ix - Unsigned interaction to sign
-   * @param opts - Optional description for the approval screen
+   * @param opts - description is accepted for a future wallet that can show
+   *   it; today moi.signInteraction carries only the interaction, so nothing
+   *   here reaches the phone. The chat is where the user reads the sentence.
    * @returns Signed payload { ix_args, signatures } ready to broadcast
    */
   async signInteractionFor(

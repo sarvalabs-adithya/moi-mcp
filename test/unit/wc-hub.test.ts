@@ -266,8 +266,9 @@ describe("WalletConnectHub", () => {
 
       await hub.signInteractionFor("topic-a", ix, { description: "Custom description" });
 
-      // The hub doesn't use opts.description directly (it's for the wallet's UI),
-      // but we verify the request was made without errors.
+      // moi.signInteraction has no field for a label (verified against Sarva's
+      // reference dapp and the wallet extension spec), so the description is
+      // accepted and dropped. The write tools put it in the chat instead.
       expect((fakeClient.request as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
     });
 

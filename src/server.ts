@@ -41,6 +41,8 @@ import { MoiError } from "./moi-error.js";
 import { ErrorCode } from "./schema.js";
 import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { brandAsset, landingHtml } from "./branding.js";
+import { securityHeaders } from "./security-headers.js";
+import { randomUUID } from "node:crypto";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { WriteJournal } from "./journal.js";
 import { NETWORKS } from "./moi/provider.js";
@@ -162,6 +164,10 @@ const CONNECT_OUTPUT = {
   uri: z.string().describe("WalletConnect pairing URI. Paste into MOI Wallet if the QR image is not shown."),
   expiresAt: z.number().describe("Unix seconds; the pairing proposal dies at this time."),
   mode: z.enum(["persistent", "once"]).describe("How long the pairing lives once approved."),
+  replaces: z
+    .object({ address: z.string(), since: z.string() })
+    .optional()
+    .describe("Present when a live pairing already exists for this user and will be replaced on approval."),
 };
 const WALLET_STATUS_OUTPUT = {
   connected: z.boolean(),
@@ -202,7 +208,7 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
           .optional()
           .describe(
             "true (default): stay connected for a week, so later transactions only need a tap on the " +
-              "phone. false: forget the pairing after the next approved transaction, or after 15 idle minutes.",
+              "phone. false: forget the pairing after the next approved transaction, or after 15 minutes.",
           ),
       },
       outputSchema: CONNECT_OUTPUT,
@@ -212,6 +218,12 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
       try {
         const userId = requireAuth().userId;
         const mode: PairingMode = remember === false ? "once" : "persistent";
+        // Say so when this would replace a wallet that is already paired. A
+        // stolen cookie could otherwise swap in an attacker's phone silently,
+        // and an honest user reconnecting deserves to know too.
+        const existing = await deps.store.get(userId);
+        const replaces =
+          existing && !isExpired(existing) ? { address: existing.address, since: existing.createdAt } : undefined;
         const { uri, expiresAt } = await deps.startPairing(userId, mode);
 
         // The URI lands in the chat transcript, and it carries the key for
@@ -223,7 +235,7 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
         const png = await QRCode.toBuffer(uri, { type: "png", width: 320, margin: 1 });
         const lifetime =
           mode === "once"
-            ? "This pairing is forgotten after your next approved transaction, or after 15 idle minutes."
+            ? "This pairing is forgotten after your next approved transaction, or after 15 minutes."
             : 'You stay connected for a week. Say "disconnect my wallet" to end it sooner.';
         const text = [
           "Scan this QR code with MOI Wallet on your phone, then approve the pairing there.",
@@ -231,8 +243,14 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
           uri,
           "It expires in about 5 minutes. " + lifetime,
           "Once approved, moi_wallet_status confirms the pairing.",
+          ...(replaces
+            ? [
+                `Note: a wallet is already paired to this account (${replaces.address}). Approving this replaces it. ` +
+                  "If you did not ask to change wallets, do not scan; say \"disconnect my wallet\" instead.",
+              ]
+            : []),
         ].join("\n");
-        const structuredContent = { uri, expiresAt, mode };
+        const structuredContent = { uri, expiresAt, mode, ...(replaces ? { replaces } : {}) };
         return {
           content: [
             { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
@@ -324,6 +342,7 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
 export function buildHostedApp(deps: HostedDeps): Application {
   const app = express();
   app.disable("x-powered-by");
+  app.use(securityHeaders(deps.publicUrl));
 
   app.get("/health", (_req, res) => {
     let network = "unknown";
@@ -458,6 +477,7 @@ function makeStartPairing(
   cfg: ReturnType<typeof getConfig>,
   hub: WalletConnectHubLike,
   store: WalletSessionStore,
+  journal: WriteJournal,
 ): HostedDeps["startPairing"] {
   return async (userId: string, mode?: PairingMode) => {
     const { uri, approval } = await hub.pair(cfg.MOI_NETWORK);
@@ -484,6 +504,19 @@ function makeStartPairing(
           expiresAt: expiryFor(mode ?? modeForUser(userId), Math.floor(Date.now() / 1000)),
         };
         try {
+          const previous = await store.get(userId);
+          if (previous && previous.topic !== session.topic) {
+            // Recorded like a write: replacing the phone that gets asked to
+            // sign is the most consequential thing a session can do.
+            await journal.append({
+              id: randomUUID(),
+              userId,
+              kind: "pairing_replaced",
+              state: "confirmed",
+              detail: JSON.stringify({ from: previous.address, to: session.account }),
+            });
+            log("info", "a user replaced their wallet pairing");
+          }
           await store.set(record);
           consumeForUser(userId);
         } catch (err) {
@@ -546,6 +579,8 @@ async function main(): Promise<void> {
   const hosted = getHostedConfig();
 
   const app = express();
+  app.disable("x-powered-by");
+  app.use(securityHeaders(hosted.PUBLIC_URL));
   const { authenticate, challengeHeader } = mountAuth(app, {
     publicUrl: hosted.PUBLIC_URL,
     dataDir: hosted.dataDir,
@@ -577,7 +612,7 @@ async function main(): Promise<void> {
   wireSessionDeleteReconciliation(hub, store);
   await reconcileJournalOnBoot(journal);
 
-  const startPairing = makeStartPairing(cfg, hub, store);
+  const startPairing = makeStartPairing(cfg, hub, store, journal);
   mountPairing(app, { resolveUri: async (userId) => (await startPairing(userId)).uri });
 
   app.use(

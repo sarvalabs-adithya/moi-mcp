@@ -10,6 +10,7 @@ import express from "express";
 
 import { newUid, randomToken, safeEqual, sha256Base64Url, sha256Hex, signUid, verifySignedUid } from "./crypto.js";
 import { renderConsentPage, renderErrorPage } from "./pages.js";
+import { rateLimit } from "./rate-limit.js";
 import type { ClientStore, CodeStore, TokenStore } from "./store.js";
 import type { StoredClientRecord } from "./types.js";
 import { isAllowedRedirectUri, parseCookies } from "./util.js";
@@ -117,7 +118,9 @@ function mountMetadata(app: Express, deps: RouteDeps): void {
 // ---------------------------------------------------------------------------
 
 function mountRegister(app: Express, deps: RouteDeps): void {
-  app.post("/register", express.json(), (req, res) => {
+  // Unauthenticated and writes a file per call: the cheapest thing to spam.
+  const limiter = rateLimit({ windowMs: 60_000, max: 10 });
+  app.post("/register", limiter, express.json(), (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const redirectUris = body["redirect_uris"];
 
@@ -239,6 +242,7 @@ function mountAuthorize(app: Express, deps: RouteDeps): void {
     const html = renderConsentPage({
       clientName: client.clientName,
       scopes: requestedScopes,
+      redirectOrigin: new URL(redirectUri).origin,
       formAction: "/authorize/decision",
       hidden: {
         client_id: clientId,
@@ -252,7 +256,8 @@ function mountAuthorize(app: Express, deps: RouteDeps): void {
     res.status(200).type("html").send(html);
   });
 
-  app.post("/authorize/decision", express.urlencoded({ extended: false }), (req, res) => {
+  const decisionLimiter = rateLimit({ windowMs: 60_000, max: 20 });
+  app.post("/authorize/decision", decisionLimiter, express.urlencoded({ extended: false }), (req, res) => {
     const body = req.body as Record<string, string | undefined>;
     const clientId = body["client_id"];
     const redirectUri = body["redirect_uri"];
@@ -385,7 +390,8 @@ function handleRefreshTokenGrant(res: Response, body: Record<string, string | un
 }
 
 function mountToken(app: Express, deps: RouteDeps): void {
-  app.post("/token", express.urlencoded({ extended: false }), (req, res) => {
+  const tokenLimiter = rateLimit({ windowMs: 60_000, max: 30 });
+  app.post("/token", tokenLimiter, express.urlencoded({ extended: false }), (req, res) => {
     const body = req.body as Record<string, string | undefined>;
     switch (body["grant_type"]) {
       case "authorization_code":

@@ -164,9 +164,10 @@ export function registerHostedWrites(
     {
       title: "Transfer a MOI asset",
       description:
-        "Propose a transfer of a MOI native asset. Builds the interaction here and sends it to " +
-        "MOI Wallet on your phone — nothing moves until you tap Send there. The balance is " +
-        "checked first. Returns the interaction hash once broadcast.",
+        "Propose a transfer of a MOI asset from the user's paired wallet; nothing moves until they tap Send on their phone. The balance is checked first." +
+        " BEFORE calling this, state exactly what will happen in one sentence, with the amount, the asset symbol, and the full recipient address, and get the user's explicit yes. " +
+        "The phone shows raw operation details, not that sentence, so the chat is where the user reads what they are approving. " +
+        "Approval can take a few minutes; the call waits for it. Returns the interaction hash once broadcast, or a reason it was refused.",
       inputSchema: TransferInput.shape,
       outputSchema: WriteOutputShape,
       annotations: WRITE_ANNOTATIONS,
@@ -196,6 +197,7 @@ export function registerHostedWrites(
 
         return ok({
           status: "sent",
+          summary: prepared.description,
           hash,
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
@@ -211,11 +213,10 @@ export function registerHostedWrites(
     {
       title: "Create a MOI asset",
       description:
-        "Propose creating a new MOI native asset (a token). `supply` sets the MAXIMUM supply — " +
-        "it does not mint anything, so circulating supply starts at 0 and you will hold none " +
-        "until you call moi_mint. `dimension` is the number of decimal places; `standard` is " +
-        "MAS0, MAS1, MAS2 or MASX. Storage funding is handled automatically. Sent to MOI Wallet " +
-        "for approval on your phone.",
+        "Propose creating a new MOI asset owned by the user's paired wallet; nothing happens until they tap Send on their phone. Funds the asset's storage automatically." +
+        " BEFORE calling this, state exactly what will happen in one sentence, with the amount, the asset symbol, and the full recipient address, and get the user's explicit yes. " +
+        "The phone shows raw operation details, not that sentence, so the chat is where the user reads what they are approving. " +
+        "Approval can take a few minutes; the call waits for it. Returns the interaction hash once broadcast, or a reason it was refused.",
       inputSchema: CreateAssetInput.shape,
       outputSchema: WriteOutputShape,
       annotations: WRITE_ANNOTATIONS,
@@ -255,6 +256,7 @@ export function registerHostedWrites(
 
         return ok({
           status: "sent",
+          summary: prepared.description,
           hash,
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
@@ -270,9 +272,10 @@ export function registerHostedWrites(
     {
       title: "Mint tokens of a MOI asset",
       description:
-        "Mint tokens of an asset you manage, to yourself or another account. Creating an asset " +
-        "sets a maximum supply but mints nothing — until you mint, circulating supply is 0, you " +
-        "hold none, and the asset does not appear in a wallet. Sent to MOI Wallet for approval.",
+        "Propose minting more of an asset the user's paired wallet manages; nothing happens until they tap Send on their phone." +
+        " BEFORE calling this, state exactly what will happen in one sentence, with the amount, the asset symbol, and the full recipient address, and get the user's explicit yes. " +
+        "The phone shows raw operation details, not that sentence, so the chat is where the user reads what they are approving. " +
+        "Approval can take a few minutes; the call waits for it. Returns the interaction hash once broadcast, or a reason it was refused.",
       inputSchema: MintInput.shape,
       outputSchema: WriteOutputShape,
       annotations: WRITE_ANNOTATIONS,
@@ -302,6 +305,7 @@ export function registerHostedWrites(
 
         return ok({
           status: "sent",
+          summary: prepared.description,
           hash,
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
@@ -317,9 +321,10 @@ export function registerHostedWrites(
     {
       title: "Call a MOI logic routine",
       description:
-        "Call a routine on a deployed MOI logic. kind:'view' reads the result immediately and " +
-        "needs no wallet. kind:'invoke' changes state and is sent to MOI Wallet for approval. " +
-        "Call moi_get_logic first to learn the routine names and argument order.",
+        "Call a routine on a MOI logic. kind=view reads and needs no wallet; kind=invoke changes state and nothing happens until the user taps Send on their phone." +
+        " BEFORE calling this, state exactly what will happen in one sentence, with the amount, the asset symbol, and the full recipient address, and get the user's explicit yes. " +
+        "The phone shows raw operation details, not that sentence, so the chat is where the user reads what they are approving. " +
+        "Approval can take a few minutes; the call waits for it. Returns the interaction hash once broadcast, or a reason it was refused.",
       inputSchema: CallLogicInput.shape,
       annotations: { ...WRITE_ANNOTATIONS, readOnlyHint: false },
     },
@@ -362,6 +367,7 @@ export function registerHostedWrites(
 
         return ok({
           status: "sent",
+          summary: prepared.description,
           hash,
           explorerUrl: interactionUrl(cfg.MOI_NETWORK, hash, cfg.MOI_EXPLORER_URL),
         });
