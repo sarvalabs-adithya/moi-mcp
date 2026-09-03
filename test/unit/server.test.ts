@@ -103,6 +103,11 @@ function makeDeps(store: WalletSessionStore): HostedDeps {
       url: `https://example.test/pair/${userId}`,
       expiresAt: Date.now() + 300_000,
     }),
+    startPairing: async (userId, mode) => ({
+      uri: `wc:${userId}@2?relay-protocol=irn&symKey=${"0".repeat(64)}`,
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+      ...(mode ? { mode } : {}),
+    }),
   };
 }
 
@@ -244,6 +249,33 @@ describe("hosted transport", () => {
     const { status, json } = await rpc(baseUrl, toolCall(1, "moi_connect_wallet"), auth);
     expect(status).toBe(200);
     expect(json.result.isError).toBeFalsy();
+  });
+
+  it("returns the QR inline as an image plus the pasteable URI, defaulting to a persistent pairing", async () => {
+    const auth = { authorization: `Bearer ${VALID_TOKEN}` };
+    const { json } = await rpc(baseUrl, toolCall(1, "moi_connect_wallet"), auth);
+    const content = json.result.content as Array<{ type: string; mimeType?: string; data?: string; text?: string }>;
+
+    const image = content.find((c) => c.type === "image");
+    expect(image?.mimeType).toBe("image/png");
+    // A real PNG, not an empty placeholder.
+    expect(Buffer.from(image?.data ?? "", "base64").subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+
+    const text = content.find((c) => c.type === "text")?.text ?? "";
+    expect(text).toContain("wc:");
+    expect(json.result.structuredContent.mode).toBe("persistent");
+  });
+
+  it("forgets the pairing after one use when the user asks not to be remembered", async () => {
+    const auth = { authorization: `Bearer ${VALID_TOKEN}` };
+    const body = {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "moi_connect_wallet", arguments: { remember: false } },
+    };
+    const { json } = await rpc(baseUrl, body, auth);
+    expect(json.result.structuredContent.mode).toBe("once");
   });
 
   it("GATED covers every wallet tool and every write tool in the schema's TOOLS manifest", () => {

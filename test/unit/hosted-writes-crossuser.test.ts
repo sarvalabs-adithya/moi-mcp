@@ -165,6 +165,11 @@ function makeDeps(store: WalletSessionStore, hub: WalletConnectHubLike, journal:
       url: `https://example.test/pair/${userId}`,
       expiresAt: Date.now() + 300_000,
     }),
+    startPairing: async (userId, mode) => ({
+      uri: `wc:${userId}@2?relay-protocol=irn&symKey=${"0".repeat(64)}`,
+      expiresAt: Math.floor(Date.now() / 1000) + 300,
+      ...(mode ? { mode } : {}),
+    }),
     hub,
     journal,
   };

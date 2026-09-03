@@ -44,7 +44,8 @@ import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { WriteJournal } from "./journal.js";
 import { NETWORKS } from "./moi/provider.js";
 import { createPairingLink as createPairingLinkFor, consumeForUser, modeForUser, mountPairing } from "./pairing/index.js";
-import { expiresAtOf, expiryFor, isExpired } from "./wc/lifetime.js";
+import { expiresAtOf, expiryFor, isExpired, type PairingMode } from "./wc/lifetime.js";
+import QRCode from "qrcode";
 import { registerHostedWrites } from "./tools/hosted-writes.js";
 import { WalletConnectHub, type WalletConnectHubLike } from "./wc/hub.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
@@ -98,6 +99,13 @@ export interface HostedDeps {
   resolveUriMounted: boolean;
   /** One-arg wrapper over pairing/index.js's createPairingLink(userId, publicUrl) — the publicUrl is baked in by whoever builds this object. */
   createPairingLink(userId: string): { url: string; expiresAt: number };
+  /**
+   * Start a WalletConnect pairing for this user and persist the session once
+   * the phone approves. Returns the wc: URI to show them and when it dies.
+   * `mode` is the lifetime the user asked for in chat; the pairing page's
+   * toggle applies when it is omitted.
+   */
+  startPairing(userId: string, mode?: PairingMode): Promise<{ uri: string; expiresAt: number }>;
 }
 
 /** Collect a JSON body, refusing anything oversized. Mirrors src/http.ts. */
@@ -147,7 +155,11 @@ function networkForCaip2(caip2: string): string | undefined {
   return Object.values(NETWORKS).find((n) => n.caip2 === caip2)?.network;
 }
 
-const CONNECT_OUTPUT = { url: z.string().url(), expiresAt: z.number(), instructions: z.string() };
+const CONNECT_OUTPUT = {
+  uri: z.string().describe("WalletConnect pairing URI. Paste into MOI Wallet if the QR image is not shown."),
+  expiresAt: z.number().describe("Unix seconds; the pairing proposal dies at this time."),
+  mode: z.enum(["persistent", "once"]).describe("How long the pairing lives once approved."),
+};
 const WALLET_STATUS_OUTPUT = {
   connected: z.boolean(),
   address: z.string().optional(),
@@ -177,27 +189,52 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
     {
       title: "Connect MOI Wallet",
       description:
-        "Get a one-time link to pair MOI Wallet on your phone with this server over WalletConnect. " +
-        "Open the link and scan the QR code with MOI Wallet, then call moi_wallet_status to confirm " +
-        "the pairing landed. No private key ever reaches this server.",
-      inputSchema: {},
+        "Pair MOI Wallet on your phone with this server over WalletConnect. Returns a QR code image " +
+        "to scan, plus the pairing text to paste into the wallet if the image is not shown. After the " +
+        "user approves on their phone, call moi_wallet_status to confirm. No private key ever reaches " +
+        "this server. If the user has not said how long to stay connected, ask before calling.",
+      inputSchema: {
+        remember: z
+          .boolean()
+          .optional()
+          .describe(
+            "true (default): stay connected for a week, so later transactions only need a tap on the " +
+              "phone. false: forget the pairing after the next approved transaction, or after 15 idle minutes.",
+          ),
+      },
       outputSchema: CONNECT_OUTPUT,
-      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    async () => {
+    async ({ remember }) => {
       try {
-        // NEVER put the raw wc: URI here — it carries a live relay symKey and
-        // this response lands straight in the chat transcript. The link opens
-        // a page (src/pairing/index.ts) that is the only place the URI is
-        // ever resolved and rendered.
-        const { url, expiresAt } = deps.createPairingLink(requireAuth().userId);
-        const structuredContent = {
-          url,
-          expiresAt,
-          instructions: `Open this link and scan the QR code with MOI Wallet: ${url}`,
-        };
+        const userId = requireAuth().userId;
+        const mode: PairingMode = remember === false ? "once" : "persistent";
+        const { uri, expiresAt } = await deps.startPairing(userId, mode);
+
+        // The URI lands in the chat transcript, and it carries the key for
+        // this pairing proposal. That is a deliberate trade: the proposal is
+        // dead after about five minutes or its first use, so the exposure is a
+        // real-time race on the transcript, and the user chose staying in the
+        // chat over a separate page. Funds are never at stake either way; a
+        // hijacked pairing can raise prompts on a phone, not sign for it.
+        const png = await QRCode.toBuffer(uri, { type: "png", width: 320, margin: 1 });
+        const lifetime =
+          mode === "once"
+            ? "This pairing is forgotten after your next approved transaction, or after 15 idle minutes."
+            : 'You stay connected for a week. Say "disconnect my wallet" to end it sooner.';
+        const text = [
+          "Scan this QR code with MOI Wallet on your phone, then approve the pairing there.",
+          "If the image is not shown, paste this into MOI Wallet's WalletConnect screen instead:",
+          uri,
+          "It expires in about 5 minutes. " + lifetime,
+          "Once approved, moi_wallet_status confirms the pairing.",
+        ].join("\n");
+        const structuredContent = { uri, expiresAt, mode };
         return {
-          content: [{ type: "text" as const, text: structuredContent.instructions }],
+          content: [
+            { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" },
+            { type: "text" as const, text },
+          ],
           structuredContent,
         };
       } catch (err) {
@@ -402,12 +439,12 @@ export function buildHostedApp(deps: HostedDeps): Application {
  * specific user's topic — the relay client itself has no notion of which
  * user paired, so asking it would give whoever paired most recently.
  */
-function makeResolveUri(
+function makeStartPairing(
   cfg: ReturnType<typeof getConfig>,
   hub: WalletConnectHubLike,
   store: WalletSessionStore,
-): (userId: string) => Promise<string> {
-  return async (userId: string): Promise<string> => {
+): HostedDeps["startPairing"] {
+  return async (userId: string, mode?: PairingMode) => {
     const { uri, approval } = await hub.pair(cfg.MOI_NETWORK);
 
     // Do not block the pairing page on the phone tap; it already polls via
@@ -425,10 +462,11 @@ function makeResolveUri(
           address: session.account,
           sessionData: session,
           createdAt: new Date(session.createdAt * 1000).toISOString(),
-          // Read at approval time, not link-creation time, so a choice made on
-          // the page after the link was issued still counts.
-          mode: modeForUser(userId),
-          expiresAt: expiryFor(modeForUser(userId), Math.floor(Date.now() / 1000)),
+          // The chat tool passes the mode the user asked for. The page has no
+          // way to, so its toggle is read here at approval time instead, so a
+          // choice made after the link was issued still counts.
+          mode: mode ?? modeForUser(userId),
+          expiresAt: expiryFor(mode ?? modeForUser(userId), Math.floor(Date.now() / 1000)),
         };
         try {
           await store.set(record);
@@ -440,7 +478,8 @@ function makeResolveUri(
       (err: unknown) => log("error", `pairing not completed: ${messageOf(err)}`),
     );
 
-    return uri;
+    // WalletConnect proposals live about five minutes; tell the user so.
+    return { uri, expiresAt: Math.floor(Date.now() / 1000) + 5 * 60 };
   };
 }
 
@@ -523,7 +562,8 @@ async function main(): Promise<void> {
   wireSessionDeleteReconciliation(hub, store);
   await reconcileJournalOnBoot(journal);
 
-  mountPairing(app, { resolveUri: makeResolveUri(cfg, hub, store) });
+  const startPairing = makeStartPairing(cfg, hub, store);
+  mountPairing(app, { resolveUri: async (userId) => (await startPairing(userId)).uri });
 
   app.use(
     buildHostedApp({
@@ -534,6 +574,7 @@ async function main(): Promise<void> {
       journal,
       resolveUriMounted: true,
       createPairingLink: (userId: string) => createPairingLinkFor(userId, hosted.PUBLIC_URL),
+      startPairing,
     }),
   );
 
