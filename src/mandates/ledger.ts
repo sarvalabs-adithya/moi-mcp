@@ -37,6 +37,11 @@ export interface MandateRecord {
  * Persists mandate state by replaying the journal.
  * The journal is the single source of truth; no separate mandate store.
  */
+/**
+ * Spend states that hand capacity back to the cap. Everything else counts.
+ */
+const RELEASED_STATES = new Set<string>(["orphaned", "failed"]);
+
 export class MandateLedger {
   private journalPath: string;
 
@@ -129,7 +134,12 @@ export class MandateLedger {
       if (e.kind === "mandate_spend") {
         // Get the latest state for this entry id across ALL entries
         const lastEntryState = this.getLatestEntryState(allEntries, e.id);
-        if (lastEntryState && (lastEntryState.state === "proposed" || lastEntryState.state === "confirmed")) {
+        // Fail closed: a spend counts against the cap unless it was explicitly
+        // given back ("orphaned"/"failed"). Listing the counted states instead
+        // would silently free cap for any state nobody remembered to add —
+        // including "broadcast", which is precisely the one we cannot prove
+        // never landed.
+        if (lastEntryState && !RELEASED_STATES.has(lastEntryState.state)) {
           const spendDetail = JSON.parse(e.detail || "{}");
           spent += BigInt(spendDetail.amount || "0");
         }
@@ -297,6 +307,56 @@ export class MandateLedger {
   }
 
   /**
+   * Records that a reserved spend is about to be signed and broadcast.
+   *
+   * This is what makes crash recovery decidable. A spend still sitting at
+   * "proposed" provably never reached the network, so its capacity can be
+   * given back. One at "broadcast" may or may not have landed, and we have
+   * no way to tell from the journal alone — so it keeps counting.
+   */
+  async markBroadcasting(journalEntryId: string): Promise<void> {
+    await this.journal.update(journalEntryId, "broadcast");
+  }
+
+  /**
+   * Resolves spends stranded by a crash between reserve() and commit()/release().
+   *
+   * Releases only what provably never went out; anything that may have hit the
+   * chain stays counted and is returned so the caller can surface it. Freeing a
+   * spend that really happened would let the cap be spent twice, so the
+   * asymmetry is deliberate.
+   */
+  async reconcileStranded(): Promise<{ released: string[]; held: StrandedSpend[] }> {
+    const allEntries = this.readAllJournalEntries();
+    const seen = new Set<string>();
+    const released: string[] = [];
+    const held: StrandedSpend[] = [];
+
+    for (const e of allEntries) {
+      if (e.kind !== "mandate_spend" || seen.has(e.id)) continue;
+      seen.add(e.id);
+
+      const latest = this.getLatestEntryState(allEntries, e.id);
+      if (!latest || RELEASED_STATES.has(latest.state) || latest.state === "confirmed") continue;
+
+      if (latest.state === "proposed") {
+        await this.release(e.id);
+        released.push(e.id);
+      } else {
+        let amount = "unknown";
+        try {
+          amount = String(JSON.parse(e.detail || "{}").amount ?? "unknown");
+        } catch {
+          // detail is advisory here; an unparsable one must not abort recovery
+        }
+        held.push({ journalEntryId: e.id, userId: e.userId, state: latest.state, amount });
+      }
+    }
+
+    return { released, held };
+  }
+
+  /**
    * Read all entries from the journal (not just pending).
    * Needed for reduction: we must see the full history to find the latest grant timestamp.
    * Mirrors WriteJournal's private readAll implementation.
@@ -395,6 +455,14 @@ export class MandateLedger {
     if (suffix) return `${base}:${suffix}`;
     return base;
   }
+}
+
+/** A spend that may or may not have reached the chain; its cap stays held. */
+export interface StrandedSpend {
+  journalEntryId: string;
+  userId: string;
+  state: string;
+  amount: string;
 }
 
 // Re-export for convenience

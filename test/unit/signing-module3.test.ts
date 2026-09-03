@@ -562,3 +562,40 @@ describe("Design Contract Requirements", () => {
     expect(wallet).toBeInstanceOf(Wallet);
   });
 });
+
+describe("FileAgentKeyStore concurrent creation", () => {
+  beforeEach(() => {
+    setupEnv();
+  });
+  afterEach(() => {
+    teardownEnv();
+  });
+
+  it("returns one address when the same new user is created twice at once", async () => {
+    const dir = tempDataDir();
+    const store = new FileAgentKeyStore(dir);
+
+    // Unserialized, both calls see no record, each generates its own wallet,
+    // and the later write wins — leaving one caller holding an address whose
+    // key was overwritten and can no longer sign.
+    const [a, b] = await Promise.all([
+      store.getOrCreate("racer"),
+      store.getOrCreate("racer"),
+    ]);
+
+    expect(a.address).toBe(b.address);
+    expect((await store.get("racer"))?.address).toBe(a.address);
+  });
+
+  it("still gives different users different keys", async () => {
+    const dir = tempDataDir();
+    const store = new FileAgentKeyStore(dir);
+
+    const [a, b] = await Promise.all([
+      store.getOrCreate("userA"),
+      store.getOrCreate("userB"),
+    ]);
+
+    expect(a.address).not.toBe(b.address);
+  });
+});

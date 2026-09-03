@@ -30,6 +30,7 @@ import { ErrorCode, type Network } from "../schema.js";
 import type { AuthInfo } from "../auth/index.js";
 import type { AgentKeyStore } from "../signing/agent-keys.js";
 import { MandateLedger, type MandateKey } from "../mandates/ledger.js";
+import { MIN_AGENT_FUNDING_KMOI } from "../mandates/funding.js";
 import { mandateSignerForUser } from "../signing/mandate-signer.js";
 import { signAndBroadcast } from "../signing/index.js";
 import { assertWillSucceed, senderFor } from "./writes.js";
@@ -76,9 +77,13 @@ export interface AgentFundingSuggestedAction {
  * Measured via simulation; we do not hold an agent key capable of signing,
  * so we cannot pre-measure in the usual way.
  */
-export const TRANSFER_FROM_FUEL_ESTIMATE = 300n;
-export const FUEL_MARGIN_BPS = 15000n; // 1.5x
-export const MIN_AGENT_FUNDING_KMOI = (TRANSFER_FROM_FUEL_ESTIMATE * FUEL_MARGIN_BPS) / 10000n;
+// Re-exported, not redefined. How much fuel an agent needs before it may spend
+// is custody-relevant, and two copies drift the first time someone edits one.
+export {
+  TRANSFER_FROM_FUEL_ESTIMATE,
+  FUEL_MARGIN_BPS,
+  MIN_AGENT_FUNDING_KMOI,
+} from "../mandates/funding.js";
 
 /**
  * Funding check result: either funded and ready, or underfunded with remediation.
@@ -340,6 +345,9 @@ export function registerMandateExecutor(
         // real. Past this point we keep the reservation and return the hash.
         let hash: string;
         try {
+          // Past this line a crash can no longer be read as "never sent", so the
+          // reconciler will hold the cap rather than hand it back.
+          await deps.ledger.markBroadcasting(reservation.journalEntryId);
           const mandateSigner = await mandateSignerForUser(deps.dataDir, auth.userId);
           hash = await signAndBroadcast(
             mandateSigner,

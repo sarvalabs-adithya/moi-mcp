@@ -493,6 +493,25 @@ async function main(): Promise<void> {
   const journal = new WriteJournal(hosted.dataDir);
   const agentKeys = new FileAgentKeyStore(hosted.dataDir);
   const ledger = new MandateLedger(journal, hosted.dataDir);
+
+  // Recover spends stranded by a previous crash before serving traffic. Anything
+  // that provably never reached the chain gives its cap back; anything that might
+  // have landed keeps holding it and is named here so it can be resolved by hand.
+  try {
+    const { released, held } = await ledger.reconcileStranded();
+    if (released.length > 0) {
+      log("info", `released ${released.length} mandate spend(s) that never reached the chain`);
+    }
+    for (const s of held) {
+      log(
+        "error",
+        `mandate spend ${s.journalEntryId} (user ${s.userId}, amount ${s.amount}) was mid-broadcast ` +
+          `at shutdown; its cap stays held until someone confirms on chain whether it landed`,
+      );
+    }
+  } catch (err) {
+    log("error", `mandate reconciliation failed at startup: ${messageOf(err)}`);
+  }
   mountPairing(app, { resolveUri: makeResolveUri(cfg, hosted, store) });
 
   const providerOptions = () => ({ network: cfg.MOI_NETWORK, rpcUrl: cfg.MOI_RPC_URL });

@@ -58,6 +58,9 @@ export interface AgentKeyStore {
  * Mirrors FileWalletSessionStore's atomic-write and error-handling pattern exactly.
  */
 export class FileAgentKeyStore implements AgentKeyStore {
+  /** Tail promise per userId, serializing first-time key creation. */
+  private readonly createQueues = new Map<string, Promise<unknown>>();
+
   private agentsDir: string;
 
   constructor(dataDir: string) {
@@ -92,6 +95,22 @@ export class FileAgentKeyStore implements AgentKeyStore {
    * Subsequent calls return the existing record (idempotent).
    */
   async getOrCreate(userId: string): Promise<AgentKeyRecord> {
+    // Serialize per user: without this, two concurrent first-time calls both
+    // see no record, each generate a different wallet, and the later set()
+    // wins — leaving the other caller holding an address nothing can sign for.
+    const tail = this.createQueues.get(userId) ?? Promise.resolve();
+    const run = tail.then(
+      () => this.getOrCreateUnlocked(userId),
+      () => this.getOrCreateUnlocked(userId),
+    );
+    this.createQueues.set(
+      userId,
+      run.catch(() => undefined),
+    );
+    return run;
+  }
+
+  private async getOrCreateUnlocked(userId: string): Promise<AgentKeyRecord> {
     // Check if already exists
     const existing = await this.get(userId);
     if (existing) return existing;
