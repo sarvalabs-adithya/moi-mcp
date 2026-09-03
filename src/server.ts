@@ -41,6 +41,8 @@ import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { NETWORKS } from "./moi/provider.js";
 import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing } from "./pairing/index.js";
+import { registerHostedWrites } from "./tools/hosted-writes.js";
+import { WalletConnectHub, type WalletConnectHubLike } from "./wc/hub.js";
 import { WalletConnectClient } from "./wc/client.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
 
@@ -86,6 +88,7 @@ export interface HostedDeps {
   authenticate: AuthHandle["authenticate"];
   challengeHeader: AuthHandle["challengeHeader"];
   store: WalletSessionStore;
+  hub: WalletConnectHubLike;
   /** Whether mountPairing(app, ...) was called on the outer app main() builds this onto. Surfaced at /health only — this app never serves /pair itself. */
   resolveUriMounted: boolean;
   /** One-arg wrapper over pairing/index.js's createPairingLink(userId, publicUrl) — the publicUrl is baked in by whoever builds this object. */
@@ -316,7 +319,10 @@ export function buildHostedApp(deps: HostedDeps): Application {
     // state — and so an authenticated request's wallet tools never leak into
     // an unauthenticated one's tool list.
     const server = buildReadOnlyServer();
-    if (auth) registerWalletSurface(server, deps, auth);
+    if (auth) {
+      registerWalletSurface(server, deps, auth);
+      registerHostedWrites(server, deps, auth);
+    }
 
     const transport = withModernSchemaDialect(
       new StreamableHTTPServerTransport({ sessionIdGenerator: undefined }),
@@ -359,8 +365,18 @@ export function buildHostedApp(deps: HostedDeps): Application {
  *
  * ONE WalletConnectClient for the whole process, so ONE pairing is in flight
  * at a time across every user. That is the same limitation PLAN-HOSTED.md §1
- * notes for the trunk (a real fix is src/wc/hub.ts, a shared SignClient keyed
- * by topic) — acceptable here, not fixed here.
+ * notes for the trunk.
+ *
+ * SEAM: this WalletConnectClient is a SEPARATE SignClient from the one
+ * WalletConnectHub (§1 of the multi-user-writes contract) owns and
+ * constructs in main() below — i.e. this process currently runs two
+ * SignClients (two relay sockets, two wc.db's), not the one the contract's
+ * §0.1 invariant calls for. The contract flags the fix (rework
+ * WalletConnectClient/makeResolveUri to pair through the hub's shared
+ * SignClient instead of `defaultFactory`) as its own scoped task — it is not
+ * done here. Pairing itself (this function) is unaffected either way: it
+ * only produces a StoredWalletSession that write tools read from `store`,
+ * never from this client directly.
  *
  * WalletConnectClient is single-user code (src/wc/client.ts) that always
  * persists its OWN last-approved session to one un-keyed `<home>/session.json`
@@ -434,6 +450,13 @@ async function main(): Promise<void> {
   });
 
   const store = new FileWalletSessionStore(hosted.dataDir);
+  const hub = await WalletConnectHub.init({
+    projectId: cfg.WC_PROJECT_ID,
+    home: hosted.dataDir,
+    network: cfg.MOI_NETWORK,
+    requestTimeoutMs: cfg.REQUEST_TIMEOUT_MS,
+  });
+
   mountPairing(app, { resolveUri: makeResolveUri(cfg, hosted, store) });
 
   app.use(
@@ -441,6 +464,7 @@ async function main(): Promise<void> {
       authenticate,
       challengeHeader,
       store,
+      hub,
       resolveUriMounted: true,
       createPairingLink: (userId: string) => createPairingLinkFor(userId, hosted.PUBLIC_URL),
     }),
