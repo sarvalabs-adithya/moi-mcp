@@ -19,43 +19,43 @@ installed code; anything inferred is marked.
 
 ## STATUS — 2026-09-03
 
-Where the code actually is. Two branches are finished and unmerged, waiting
-on review and on tests only a human with a phone can run.
+**master** — the local server plus the hosted read gateway plus multi-user
+hosted writes. 352 tests. Publish-ready package (`mcp-server` bin, one-click
+`.mcpb` bundle), a Dockerfile, and `docs/deploy-voyage.md`. The read gateway
+was smoke-tested against live voyage devnet: handshake, tool listing, real
+account and asset reads, five concurrent reads clean.
 
-**master** — the local server, packaged and publish-ready. Default `mcp-server`
-bin fixed (the documented `npx` install was broken), one-click `.mcpb` bundle
-(`npm run bundle:mcpb`, ~24 MB, no Node needed by the installer),
-stranger-proof docs with verified faucet/wallet/community links,
-`docs/deploy-vm.md`. An audit swept ten lenses and fixed six confirmed
-findings, including a QR-encode rejection that would have killed the hosted
-process for every user. 297 tests.
+Hosted writes work multi-user. A shared `WalletConnectHub` whose only signing
+method takes a topic; each write resolves that topic from
+`store.get(auth.userId)`; no tool input accepts a topic or account. Verifying
+by hand caught that pairing had been running on a *different* SignClient than
+signing, which would have made every hosted write fail forever; the hub owns
+pairing now.
 
-**feat/multi-user-writes** — hosted writes, M1/M3/M5 in effect. A shared
-`WalletConnectHub` whose only signing method takes a topic; the four write
-tools registered per authenticated request, each resolving its topic from
-`store.get(auth.userId)`; a 15-case cross-user suite; the write journal wired
-through proposed/signed/broadcast with boot reconciliation. Review caught a
-missing journal (stranded approvals) and a missing `session_delete` handler;
-verifying by hand then caught a worse one: pairing ran on a *different*
-SignClient than signing, so no hosted write could ever have succeeded.
-352 tests.
+**feat/mandates-v2** — v2 delegated authority, complete end to end. 532 tests.
+Grants are signed on the owner's phone and activate only once the Approve is on
+chain; `moi_transfer_under_mandate` reserves cap, simulates, signs with the
+per-user agent key, broadcasts, then commits or releases. Review caught two
+criticals (a commit failure undoing a spend that had already landed, colliding
+spend ids) and a major (a crash stranding cap forever); all fixed, with
+recovery made decidable by a pre-broadcast marker and cap accounting that fails
+closed.
 
-**feat/mandates-v2** — v2 delegated authority. Approve/Revoke/TransferFrom
-builders, per-user agent keys, the cap ledger, and
-`moi_transfer_under_mandate`. Review found two criticals (a commit failure
-undoing a spend that had already landed, and colliding spend ids) and one
-major (a crash stranding cap forever); all fixed, with recovery now decidable
-via a pre-broadcast marker and cap accounting that fails closed. 453 tests.
+Left unmerged deliberately. v2 is the one place the server holds a key, and
+trading away the zero-key property should be a decision someone makes on
+purpose rather than something that arrives in a merge.
 
-**Needs a human.** Spike A (two pairings, one phone). The mandate spike — fund
+**Deployment, now decided.** The MCP gateway ships as part of Voyage, next to
+the JSON-RPC gateway. See `docs/deploy-voyage.md`. Owners: Gokul for how it
+slots in, Srikar to deploy, Upender for CI/CD.
+
+**Needs a human.** Spike A (two pairings, one phone). Funding
 `0x00000000311c78cc4610ca0c4762ed3e16017f783ddc8bbbd26be65e00000000`
-on devnet and the full Approve → spend → over-cap-refused → Revoke loop runs
-live. claude.ai connector loops through a tunnel. VM hostname + SSH. The npm
-scope decision, the GitHub repo, and the mcp-review email.
+on devnet, after which the whole mandate loop runs live. claude.ai connector
+loops through a tunnel. The npm scope call and the GitHub repo.
 
-**Known gaps, deliberate.** `confirmMandateGrant` has no caller, so v2 can't
-run end to end until the phone-sign path feeds it. One pairing is in flight
-at a time process-wide. Neither branch is merged.
+**Unverified.** The Dockerfile has not been built; no Docker daemon was
+running here. Nothing has touched a real phone or a real claude.ai connector.
 
 ---
 
