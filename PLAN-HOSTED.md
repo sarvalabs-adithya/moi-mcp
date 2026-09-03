@@ -54,8 +54,23 @@ slots in, Srikar to deploy, Upender for CI/CD.
 on devnet, after which the whole mandate loop runs live. claude.ai connector
 loops through a tunnel. The npm scope call and the GitHub repo.
 
+**Proven with a real phone, through claude.ai.** Sign-in, the QR pairing
+in chat, and a create plus a mint all went through the hosted server; the
+write journal holds the receipts. The chainId derivation bug that blocked the
+first attempt is fixed and pinned.
+
+**Hardened after a UX and security audit.** The approval sentence the
+wallet can never show now lives in the chat (the model must state amount,
+asset and recipient and get a yes before calling); the consent page names
+the redirect origin and explains scopes in words; replacing a paired wallet
+is announced and journaled; rate limits on the auth surface; framing and
+sniffing headers on every response; expired tokens swept; and the boot
+reconciler no longer calls a landed transaction orphaned.
+
 **Unverified.** The Dockerfile has not been built; no Docker daemon was
-running here. Nothing has touched a real phone or a real claude.ai connector.
+running here. Two people pairing at once has not been tried with two real
+phones (scripts/two-user-spike.mjs is ready for it). The purple logo cannot
+show on a tunnel hostname; it will on a real one.
 
 ---
 
