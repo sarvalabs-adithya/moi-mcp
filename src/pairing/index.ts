@@ -9,14 +9,18 @@
  */
 
 import { randomBytes } from "node:crypto";
-import type { Express, Request, Response } from "express";
+import express, { Express, Request, Response } from "express";
 import QRCode from "qrcode";
+
+import { DEFAULT_MODE, isPairingMode, type PairingMode } from "../wc/lifetime.js";
 
 /** Matches the WalletConnect proposal's own lifetime. */
 const TTL_MS = 5 * 60 * 1000;
 
 interface PairingRecord {
   userId: string;
+  /** Lifetime the user picked on the page. Read when the phone's approval lands. */
+  mode: PairingMode;
   createdAt: number; // ms, per the injected clock
   uri?: string; // resolved once, then cached — see mountPairing
   resolving?: Promise<string>; // in-flight resolveUri call; see mountPairing
@@ -26,6 +30,8 @@ interface PairingRecord {
 export interface PairingModule {
   createPairingLink(userId: string, publicUrl: string): { url: string; expiresAt: number };
   consumeForUser(userId: string): void;
+  /** The lifetime chosen on the user's live pairing page, or the default. */
+  modeForUser(userId: string): PairingMode;
   mountPairing(app: Express, opts: { resolveUri: (userId: string) => Promise<string> }): void;
 }
 
@@ -76,7 +82,7 @@ export function createPairingModule(now: () => number = Date.now): PairingModule
     }
 
     const token = randomBytes(32).toString("base64url");
-    const record: PairingRecord = { userId, createdAt: now(), used: false };
+    const record: PairingRecord = { userId, mode: DEFAULT_MODE, createdAt: now(), used: false };
     tokens.set(token, record);
     byUser.set(userId, token);
     return { url: linkUrl(publicUrl, token), expiresAt: expirySeconds(record) };
@@ -86,6 +92,33 @@ export function createPairingModule(now: () => number = Date.now): PairingModule
     const token = byUser.get(userId);
     const rec = token ? tokens.get(token) : undefined;
     if (rec) rec.used = true;
+  }
+
+  function modeForUser(userId: string): PairingMode {
+    const token = byUser.get(userId);
+    const rec = token ? tokens.get(token) : undefined;
+    return rec ? rec.mode : DEFAULT_MODE;
+  }
+
+  /**
+   * The page posts the user's choice here before they scan. Only a live,
+   * unused token can be changed, and only to a known mode; anything else is
+   * ignored with a 4xx rather than reasoned about.
+   */
+  function handleSetMode(req: PairRequest, res: Response): void {
+    const rec = tokens.get(req.params.token);
+    if (!rec || !isLive(rec)) {
+      res.status(410).json({ error: "link expired" });
+      return;
+    }
+    const body = req.body as { mode?: unknown } | undefined;
+    const mode = body?.mode;
+    if (!isPairingMode(mode)) {
+      res.status(400).json({ error: "mode must be persistent or once" });
+      return;
+    }
+    rec.mode = mode;
+    res.status(200).json({ mode });
   }
 
   async function handleGet(
@@ -135,22 +168,24 @@ export function createPairingModule(now: () => number = Date.now): PairingModule
       res.status(500).type("html").send(errorHtml());
       return;
     }
-    res.status(200).type("html").send(pairingHtml(uri, svg, expirySeconds(rec)));
+    res.status(200).type("html").send(pairingHtml(uri, svg, expirySeconds(rec), rec.mode));
   }
 
   function mountPairing(app: Express, opts: { resolveUri: (userId: string) => Promise<string> }): void {
     app.get("/pair/:token", (req: PairRequest, res: Response) => {
       void handleGet(req, res, opts.resolveUri);
     });
+    app.post("/pair/:token/mode", express.json({ limit: "1kb" }), handleSetMode);
   }
 
-  return { createPairingLink, consumeForUser, mountPairing };
+  return { createPairingLink, consumeForUser, modeForUser, mountPairing };
 }
 
 const shared = createPairingModule();
 
 export const createPairingLink = shared.createPairingLink;
 export const consumeForUser = shared.consumeForUser;
+export const modeForUser = shared.modeForUser;
 export const mountPairing = shared.mountPairing;
 
 // ---------------------------------------------------------------------------
@@ -197,6 +232,11 @@ const PAGE_STYLE = `
   .qr svg { display: block; width: 220px; height: 220px; }
   .steps { text-align: left; margin: 20px 0 0; padding-left: 20px; color: #c3c8d4; font-size: 13px; }
   .uri-row { display: flex; gap: 8px; margin-top: 20px; }
+  .mode { text-align: left; margin: 20px 0 0; padding: 12px 14px; border: 1px solid #2a2f3b; border-radius: 10px; }
+  .mode legend { padding: 0 6px; color: #c3c8d4; font-size: 13px; }
+  .mode label { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; color: #c3c8d4; font-size: 13px; cursor: pointer; }
+  .mode input { margin-top: 3px; }
+  .mode-note { margin: 8px 0 0; color: #9aa1b1; font-size: 12px; }
   .uri-row input {
     flex: 1;
     min-width: 0;
@@ -236,8 +276,10 @@ function shell(title: string, body: string): string {
 </html>`;
 }
 
-function pairingHtml(uri: string, svg: string, expiresAtSeconds: number): string {
+function pairingHtml(uri: string, svg: string, expiresAtSeconds: number, mode: PairingMode): string {
   const expiresLabel = new Date(expiresAtSeconds * 1000).toUTCString();
+  const persistentChecked = mode === "persistent" ? " checked" : "";
+  const onceChecked = mode === "once" ? " checked" : "";
   return shell(
     "Pair MOI Wallet",
     `
@@ -253,8 +295,33 @@ function pairingHtml(uri: string, svg: string, expiresAtSeconds: number): string
       <input id="uri" type="text" readonly value="${escapeHtml(uri)}" onclick="this.select()" />
       <button id="copy" type="button">Copy</button>
     </div>
+    <fieldset class="mode">
+      <legend>Stay connected?</legend>
+      <label><input type="radio" name="mode" value="persistent"${persistentChecked} />
+        <span><b>Keep me connected</b> for a week. Scan once, then just talk. You can disconnect any time.</span></label>
+      <label><input type="radio" name="mode" value="once"${onceChecked} />
+        <span><b>Just this once.</b> Forgotten after the next approved transaction, or in 15 minutes.</span></label>
+      <p class="mode-note" id="mode-note">Either way, every transaction still needs your approval on this phone.</p>
+    </fieldset>
     <p class="expiry">Expires ${escapeHtml(expiresLabel)}. Reloading this page keeps the same QR.</p>
     <script>
+      (function () {
+        var note = document.getElementById("mode-note");
+        var radios = document.querySelectorAll('input[name="mode"]');
+        for (var i = 0; i < radios.length; i++) {
+          radios[i].addEventListener("change", function (e) {
+            fetch(location.pathname + "/mode", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ mode: e.target.value })
+            }).then(function (r) {
+              note.textContent = r.ok ? "Saved. Scan whenever you're ready." : "Couldn't save that choice; reload and try again.";
+            }).catch(function () {
+              note.textContent = "Couldn't save that choice; reload and try again.";
+            });
+          });
+        }
+      })();
       document.getElementById("copy").addEventListener("click", function () {
         var input = document.getElementById("uri");
         input.select();

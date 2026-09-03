@@ -47,6 +47,8 @@ export interface WalletConnectHubLike {
     opts?: SignInteractionOpts,
   ): Promise<HubSignResult>;
   onSessionDelete(handler: (topic: string) => void): () => void;
+  /** Ends one session on the relay so the phone stops listing it. Best effort. */
+  disconnect(topic: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -130,6 +132,24 @@ export class WalletConnectHub implements WalletConnectHubLike {
         },
       ),
     };
+  }
+
+  /**
+   * Tears down a single session, by topic only. Used when a pairing is
+   * forgotten or a once-only pairing has done its one job, so the wallet does
+   * not keep showing a connection the server can no longer use.
+   */
+  async disconnect(topic: string): Promise<void> {
+    try {
+      await this.signClient.disconnect({
+        topic,
+        reason: { code: 6000, message: "Disconnected by the server" },
+      });
+    } catch (err) {
+      // The session may already be gone on the relay; that is the outcome we
+      // wanted, so it is not worth failing the caller over.
+      throw translateWcError(err);
+    }
   }
 
   /**

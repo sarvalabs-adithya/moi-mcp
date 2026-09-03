@@ -43,7 +43,8 @@ import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { WriteJournal } from "./journal.js";
 import { NETWORKS } from "./moi/provider.js";
-import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing } from "./pairing/index.js";
+import { createPairingLink as createPairingLinkFor, consumeForUser, modeForUser, mountPairing } from "./pairing/index.js";
+import { expiresAtOf, expiryFor, isExpired } from "./wc/lifetime.js";
 import { registerHostedWrites } from "./tools/hosted-writes.js";
 import { WalletConnectHub, type WalletConnectHubLike } from "./wc/hub.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
@@ -216,13 +217,22 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
     },
     async () => {
       try {
-        const record = await deps.store.get(requireAuth().userId);
+        const userId = requireAuth().userId;
+        let record = await deps.store.get(userId);
+        if (record && isExpired(record)) {
+          // Report the truth rather than a pairing the server will refuse to
+          // use, and tidy up so the next connect starts clean.
+          await deps.store.delete(userId);
+          record = undefined;
+        }
         const structuredContent = record
           ? {
               connected: true,
               address: record.address,
               caip2: record.caip2,
               ...(networkForCaip2(record.caip2) ? { network: networkForCaip2(record.caip2) } : {}),
+              mode: record.mode ?? "persistent",
+              expiresAt: expiresAtOf(record),
             }
           : { connected: false };
         return {
@@ -245,12 +255,19 @@ function registerWalletSurface(server: McpServer, deps: HostedDeps, auth: AuthIn
     },
     async () => {
       try {
-        // TRUNK TODO: this deletes our record but does not tear down the
-        // WalletConnect relay session (client.disconnect({topic})) — the
-        // phone keeps showing the pairing as active until it expires on its
-        // own. Fine for the trunk; needs the shared hub (PLAN-HOSTED.md
-        // src/wc/hub.ts) to do properly, since only that holds the SignClient.
-        await deps.store.delete(requireAuth().userId);
+        const userId = requireAuth().userId;
+        const record = await deps.store.get(userId);
+        await deps.store.delete(userId);
+        // Our record is what matters for security; the relay teardown is so
+        // the phone stops listing a connection that can no longer be used.
+        if (record) {
+          try {
+            await deps.hub.disconnect(record.topic);
+          } catch {
+            // Already gone on the relay, or the relay is unreachable. Either
+            // way the server-side pairing is deleted, which is the guarantee.
+          }
+        }
         return { content: [{ type: "text" as const, text: "Wallet disconnected." }] };
       } catch (err) {
         throw toMcpError(err);
@@ -408,6 +425,10 @@ function makeResolveUri(
           address: session.account,
           sessionData: session,
           createdAt: new Date(session.createdAt * 1000).toISOString(),
+          // Read at approval time, not link-creation time, so a choice made on
+          // the page after the link was issued still counts.
+          mode: modeForUser(userId),
+          expiresAt: expiryFor(modeForUser(userId), Math.floor(Date.now() / 1000)),
         };
         try {
           await store.set(record);

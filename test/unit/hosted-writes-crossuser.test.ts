@@ -94,6 +94,8 @@ class FakeStore implements WalletSessionStore {
  * relay expiry or phone unpair.
  */
 class FakeHub implements WalletConnectHubLike {
+  async disconnect(_topic: string): Promise<void> {}
+
   async pair(): Promise<never> {
     throw new Error("FakeHub does not pair; these tests drive signing only");
   }

@@ -26,6 +26,10 @@ export const StoredWalletSession = z.object({
   createdAt: z.string(),      // ISO string
   mandates: z.unknown().optional(),
   policy: z.unknown().optional(),
+  /** Chosen on the pairing page. Absent on records from before lifetimes existed. */
+  mode: z.enum(["persistent", "once"]).optional(),
+  /** Unix seconds. Absent means: persistent, aged from createdAt (see wc/lifetime.ts). */
+  expiresAt: z.number().int().optional(),
 });
 export type StoredWalletSession = z.infer<typeof StoredWalletSession>;
 

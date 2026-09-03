@@ -18,6 +18,7 @@ import { getConfig } from "../config.js";
 import { messageOf } from "../errors.js";
 import { interactionUrl } from "../moi/provider.js";
 import type { AuthInfo } from "../auth/types.js";
+import { isExpired } from "../wc/lifetime.js";
 import {
   CallLogicInput,
   CreateAssetInput,
@@ -99,8 +100,31 @@ async function loadSession(
   if (!stored) {
     throw new MoiError(ErrorCode.WALLET_NOT_CONNECTED, "No wallet paired for this account.");
   }
+  if (isExpired(stored)) {
+    await deps.store.delete(auth.userId);
+    throw new MoiError(
+      ErrorCode.WALLET_NOT_CONNECTED,
+      "The wallet pairing has expired. Call moi_connect_wallet to pair again.",
+    );
+  }
   assertNetworkMatches(stored, expectedNetwork);
   return stored; // hub.signInteractionFor(stored.topic, ...) validates liveness
+}
+
+/**
+ * A "just this once" pairing has done its one job. Forget it now, before the
+ * result is even returned, so nothing can reuse it. The relay teardown is best
+ * effort: the server-side deletion is the guarantee, the phone's list is
+ * cosmetic.
+ */
+async function afterSignedUse(deps: HostedWriteDeps, session: StoredWalletSession): Promise<void> {
+  if (session.mode !== "once") return;
+  await deps.store.delete(session.userId);
+  try {
+    await deps.hub.disconnect(session.topic);
+  } catch {
+    // see above
+  }
 }
 
 const WRITE_ANNOTATIONS = {
@@ -167,6 +191,7 @@ export function registerHostedWrites(
         signed = true;
 
         const hash = await broadcastSigned(ix_args, signatures);
+        await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
@@ -225,6 +250,7 @@ export function registerHostedWrites(
         signed = true;
 
         const hash = await broadcastSigned(ix_args, signatures);
+        await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
@@ -271,6 +297,7 @@ export function registerHostedWrites(
         signed = true;
 
         const hash = await broadcastSigned(ix_args, signatures);
+        await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({
@@ -330,6 +357,7 @@ export function registerHostedWrites(
         signed = true;
 
         const hash = await broadcastSigned(ix_args, signatures);
+        await afterSignedUse(deps, session);
         await deps.journal.update(id, "broadcast", { ixHash: hash });
 
         return ok({

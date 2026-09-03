@@ -76,6 +76,8 @@ class FakeStore implements WalletSessionStore {
  * wired up for every authenticated request, same as production.
  */
 class FakeHub implements WalletConnectHubLike {
+  async disconnect(_topic: string): Promise<void> {}
+
   async pair(): Promise<never> {
     throw new Error("FakeHub does not pair; these tests drive signing only");
   }
