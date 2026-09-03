@@ -1,120 +1,166 @@
-# Hosting `moi-mcp-http` on a VM
+# Deploying on a VM
 
-This covers the **read-only** HTTP transport only — 6 tools, no wallet, no
-`WC_PROJECT_ID`, stateless. The stdio server (writes, wallet) stays local; see
-`docs/local-testing.md`. Do not adapt this runbook to run the stdio server —
-it isn't stateless and was never designed to sit behind a load balancer.
+Two services live in this repo and you can run either or both.
+
+**The read gateway** (`dist/http.js`) answers questions about the chain. It is
+stateless, holds no keys, and needs no secrets. Nothing about it is delicate.
+
+**The write gateway** (`dist/server.js`) also proposes transactions, which the
+user approves on their phone. It signs people in, holds a wallet pairing per
+user, and needs one secret.
+
+Start with the read gateway even if you want both. It proves the hostname, TLS
+and proxy configuration with something that cannot break, and then the write
+gateway is the same setup with more environment variables.
 
 ## Prerequisites
 
-- An existing Ubuntu VM with **Node.js 20+** (`node -v`) and **nginx**, TLS
-  already terminating there (this doc doesn't cover certificates).
-- A **dedicated hostname** for this service — placeholder `mcp.moi.technology`
-  below. Use an exact host you control, not a path under an existing one.
+An Ubuntu VM with Node.js 20 or newer and nginx, and a **dedicated hostname**
+for this service. `mcp.moi.technology` is the placeholder below.
 
-> [!WARNING]
-> **Do not reuse the Explorer API host**, and **do not add any redirect on
-> this host** (HTTP→HTTPS or otherwise). A redirect drops the `Authorization`
-> header on the follow-up request, and claude.ai will not retry with it
-> restored — the connector will look "authenticated" and then silently 401 on
-> every call. Terminate TLS directly on `mcp.moi.technology`; no hop through a
-> host that redirects.
+Two things that will waste an afternoon if you get them wrong:
 
-## 1. Install and run with pm2
+Do not reuse a hostname that already serves something else. Terminate TLS
+directly on this host.
+
+Do not put a redirect in front of it, including HTTP to HTTPS on this
+hostname. A redirect drops the `Authorization` header, and the client will not
+retry with it restored. The connector then looks signed in and silently fails
+every call, which is close to undebuggable from the outside.
+
+## 1. Get the code onto the box
 
 ```bash
-sudo npm install -g pm2 @moi-protocol/mcp-server
+sudo mkdir -p /opt/moi-mcp && sudo chown "$USER" /opt/moi-mcp
+git clone https://github.com/sarvalabs-adithya/moi-mcp.git /opt/moi-mcp
+cd /opt/moi-mcp
+npm ci
+npm run build
+sudo npm install -g pm2
 ```
 
+## 2a. Read gateway
+
 ```bash
-MOI_NETWORK=voyage PORT=8787 pm2 start moi-mcp-http --name moi-mcp
+pm2 start ecosystem.config.cjs --only moi-mcp-read
 pm2 save
-pm2 startup   # prints a systemd command; run the one it prints, as root
+pm2 startup   # prints a command to run with sudo, run it
 ```
-
-`moi-mcp-http` needs no `WC_PROJECT_ID` — it registers no wallet tools, so
-`MOI_NETWORK` is the only env var this needs. Confirm it's alive locally
-before touching nginx:
 
 ```bash
-curl -s localhost:8787/health
+curl localhost:8787/health
+# {"ok":true,"version":"0.1.0","network":"voyage","readOnly":true}
 ```
 
-## 2. nginx reverse proxy
+## 2b. Write gateway
+
+Two extra things it needs.
+
+A WalletConnect project id, free from cloud.reown.com. Put it in a file the
+server reads, rather than in the pm2 config, which is committed:
+
+```bash
+cd /opt/moi-mcp
+printf 'WC_PROJECT_ID=your_32_character_id_here\n' > .env
+chmod 600 .env
+```
+
+A directory for wallet pairings and the write journal:
+
+```bash
+sudo mkdir -p /var/lib/moi-mcp && sudo chown "$USER" /var/lib/moi-mcp
+chmod 700 /var/lib/moi-mcp
+```
+
+Then set `PUBLIC_URL` in `ecosystem.config.cjs` to the real hostname. It is the
+OAuth issuer, so if it does not match what users actually reach, sign-in fails
+in a way that looks like a client bug.
+
+```bash
+pm2 start ecosystem.config.cjs --only moi-mcp-write
+pm2 save
+curl localhost:8788/health
+# {"ok":true,"network":"voyage","readOnly":false,"pairingMounted":true}
+```
+
+Optional: set `REDIS_URL` in the env block and both the wallet pairings and
+WalletConnect's own internal state go to Redis instead of `MOI_DATA_DIR`. On a
+VM that is unnecessary, since the disk is already stable. It matters if this
+ever moves to containers. If you do use it, Redis needs persistence enabled,
+because one running as a plain cache comes back empty and quietly un-pairs
+everyone, and it needs auth and TLS, because those records carry the key that
+lets its holder raise a signing prompt on somebody's phone.
+
+## 3. nginx
+
+Point `proxy_pass` at 8787 for the read gateway or 8788 for the write one.
 
 ```nginx
-# /etc/nginx/conf.d/moi-mcp.conf
-limit_req_zone $binary_remote_addr zone=moi_mcp:10m rate=10r/s;
+limit_req_zone $binary_remote_addr zone=moimcp:10m rate=10r/s;
 
 server {
-    listen 443 ssl;
+    listen 443 ssl http2;
     server_name mcp.moi.technology;
 
-    # ... your existing ssl_certificate / ssl_certificate_key directives ...
+    # your existing certificate directives
 
     location / {
-        limit_req zone=moi_mcp burst=20 nodelay;
+        limit_req zone=moimcp burst=20 nodelay;
 
         proxy_pass http://127.0.0.1:8787;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
 
-        # SSE dies if nginx buffers the response — it never flushes.
-        proxy_buffering off;
-        gzip off;
-
-        # claude.ai's own tool-call budget is ~300s; match it so nginx
-        # doesn't cut the connection first.
-        proxy_read_timeout 300s;
+        proxy_buffering off;      # responses stream; buffering breaks them silently
+        proxy_read_timeout 300s;  # matches the assistant's tool-call budget
         proxy_send_timeout 300s;
+        gzip off;
     }
 }
 ```
 
-Reload once the config is in place:
+`proxy_buffering off` is the one that catches people. With buffering on, the
+service looks healthy and simply never answers.
 
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-## 3. Verify from the outside
+## 4. Check it from outside
 
 ```bash
-curl -s https://mcp.moi.technology/health
-# {"ok":true,...}
-
-curl -s https://mcp.moi.technology/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
-# a JSON-RPC result with serverInfo and capabilities
+curl https://mcp.moi.technology/health
 ```
-
-If `/health` works but `/mcp` doesn't, it's almost always the reverse proxy
-(missing `Accept` header upstream, or something still buffering) rather than
-the server — `curl -s localhost:8787/mcp ...` with the same body isolates it.
-
-## 4. Add it in claude.ai
-
-Settings → Connectors → **Add custom connector** → `https://mcp.moi.technology/mcp`,
-authentication **None**.
-
-> Custom connectors may require a paid claude.ai plan — if the option is
-> missing, that's why.
-
-## A note for the future write service
-
-This VM hosts the read-only transport, which is stateless by design — any
-number of instances behind a load balancer would be fine. The **write**
-service (when it ships) will not be: it holds live WalletConnect sessions and
-pending approvals in memory, so it is **single-instance only**.
 
 ```bash
-pm2 start moi-mcp-http --name moi-mcp -i 1   # never -i max, never "cluster"
+curl -X POST https://mcp.moi.technology/mcp \
+  -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Scaling it horizontally would split sessions across processes that don't share
-state, so a pairing done on one instance would be invisible to the others.
-Don't cluster it; don't put it behind more than one node until that's been
-redesigned.
+Six tools on the read gateway, thirteen on the write one.
+
+## 5. Add it in Claude
+
+Settings, then Connectors, then Add custom connector, and paste
+`https://mcp.moi.technology/mcp`.
+
+Choose **None** for the read gateway and **OAuth** for the write one. Getting
+that wrong on the write gateway means you never sign in, so the wallet and
+transaction tools return a sign-in prompt you cannot satisfy.
+
+Then ask it something: "what's the supply of asset 0x1080... on voyage".
+
+## Updating
+
+```bash
+cd /opt/moi-mcp && git pull && npm ci && npm run build
+pm2 restart moi-mcp-write
+```
+
+Use `restart`, not `reload`. Reload overlaps the old and new process on
+purpose, and two write gateways at once fight over the same WalletConnect
+relay identity. A two second gap is the cheaper failure. The read gateway does
+not care either way.
