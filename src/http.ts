@@ -25,6 +25,11 @@ import { z } from "zod";
 
 import { getConfig, log } from "./config.js";
 import { brandAsset, brandServerInfo, landingHtml } from "./branding.js";
+import { SlidingWindow } from "./auth/rate-limit.js";
+
+// Public and unauthenticated, so a ceiling per address: enough for a busy
+// conversation, not enough to use the RPC node as a load generator.
+const readWindow = new SlidingWindow({ windowMs: 60_000, max: 240 });
 import { messageOf } from "./errors.js";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { NETWORKS } from "./moi/provider.js";
@@ -138,6 +143,15 @@ export async function handle(req: IncomingMessage, res: ServerResponse): Promise
 
   if (url.pathname !== MCP_PATH) {
     send(res, 404, { error: `Not found. The MCP endpoint is ${MCP_PATH}.` });
+    return;
+  }
+
+  const fwd = req.headers["x-forwarded-for"];
+  const client = (Array.isArray(fwd) ? fwd[0] : fwd?.split(",")[0])?.trim() || req.socket.remoteAddress || "unknown";
+  const verdict = readWindow.allow(client);
+  if (!verdict.ok) {
+    res.writeHead(429, { "content-type": "application/json", "retry-after": String(verdict.retryAfterS) });
+    res.end(JSON.stringify({ error: "rate_limited", error_description: "Too many requests. Try again shortly." }));
     return;
   }
 

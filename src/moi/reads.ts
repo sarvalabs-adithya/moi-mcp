@@ -73,6 +73,20 @@ function invalidId(kind: string, value: string, err: unknown): MoiError {
   });
 }
 
+/** Longest list a read tool hands back; beyond it the model is not reading anyway. */
+const MAX_LIST = 200;
+
+/**
+ * A string that came from the chain (a symbol, a routine name) cut to a
+ * sane length with control characters removed. Asset symbols are chosen by
+ * whoever creates the asset, which makes them the one place an outsider can
+ * put words in front of the model.
+ */
+export function clampChainText(text: unknown, max = 64): string {
+  const s = String(text ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  return s.length > max ? s.slice(0, max) + "\u2026" : s;
+}
+
 export async function getAccount(
   provider: Provider,
   address: string,
@@ -144,7 +158,7 @@ export async function getAsset(
 
   return {
     assetId,
-    symbol: info.symbol ?? "",
+    symbol: clampChainText(info.symbol ?? ""),
     standard: assetStandardName(assetId),
     supply: normalizeAmount(info.circulating_supply ?? info.max_supply ?? 0, dimension),
     dimension,
@@ -181,7 +195,7 @@ export async function getInteraction(
   }
 
   const rawOps = (ix["ix_operations"] ?? ix["operations"] ?? []) as Array<Record<string, unknown>>;
-  const operations = (Array.isArray(rawOps) ? rawOps : []).map((op) => ({
+  const operations = (Array.isArray(rawOps) ? rawOps : []).slice(0, MAX_LIST).map((op) => ({
     // Name the op rather than emitting a bare enum value — an agent reading
     // "ASSET_INVOKE" can act on it; "5" tells it nothing.
     type: opTypeName(op["type"] ?? op["tx_type"]),
@@ -240,18 +254,18 @@ export async function getLogic(
   // === "callable"; the SDK's own logic-driver matches on it). Filtering on
   // "routine" returned zero routines for every real logic. Accept both, since
   // "routine" is the name the enum KEY uses and may appear in older manifests.
-  const routines = (Array.isArray(elements) ? elements : [])
+  const routines = (Array.isArray(elements) ? elements : []).slice(0, MAX_LIST)
     .filter((el) => ["callable", "routine"].includes(String(el["kind"] ?? "")))
     .map((el) => {
       const data = (el["data"] ?? {}) as Record<string, unknown>;
       const accepts = (data["accepts"] ?? []) as Array<Record<string, unknown>>;
       const returns = (data["returns"] ?? []) as Array<Record<string, unknown>>;
       const field = (f: Record<string, unknown>) => ({
-        name: String(f["label"] ?? f["name"] ?? ""),
+        name: clampChainText(f["label"] ?? f["name"] ?? ""),
         type: String(f["type"] ?? ""),
       });
       return {
-        name: String(data["name"] ?? ""),
+        name: clampChainText(data["name"] ?? ""),
         kind: routineKind(data["kind"] ?? data["mode"]),
         inputs: (Array.isArray(accepts) ? accepts : []).map(field),
         outputs: (Array.isArray(returns) ? returns : []).map(field),

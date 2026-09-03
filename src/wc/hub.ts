@@ -78,6 +78,29 @@ export function chainIdFromSession(raw: unknown): string | undefined {
   return undefined;
 }
 
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new MoiError(
+          ErrorCode.REQUEST_TIMEOUT,
+          `No answer from MOI Wallet within ${Math.round(ms / 1000)} seconds. Nothing was sent. Check the phone and try again.`,
+        ),
+      );
+    }, ms);
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    );
+  });
+}
+
 /** Minimal metadata for WalletConnect initialization. */
 // This is what MOI Wallet shows on the pairing screen: the one label about
 // this server a user ever sees on their phone. Keep it recognisable.
@@ -106,6 +129,8 @@ export class WalletConnectHub implements WalletConnectHubLike {
     private readonly signClient: SignClientLike,
     /** Used only when a settled session carries no recognisable chain. */
     private readonly defaultChainId?: string,
+    /** How long to wait for the phone before giving up; 0 or undefined waits forever. */
+    private readonly requestTimeoutMs?: number,
   ) {}
 
   /**
@@ -114,7 +139,7 @@ export class WalletConnectHub implements WalletConnectHubLike {
    */
   static async init(config: WcConfig): Promise<WalletConnectHub> {
     const client = await defaultFactory(config);
-    return new WalletConnectHub(client, config.chainId ?? NETWORKS[config.network].caip2);
+    return new WalletConnectHub(client, config.chainId ?? NETWORKS[config.network].caip2, config.requestTimeoutMs);
   }
 
   /**
@@ -243,11 +268,17 @@ export class WalletConnectHub implements WalletConnectHubLike {
 
     // Sign via the relay.
     try {
-      const raw = await this.signClient.request<unknown>({
+      const pending = this.signClient.request<unknown>({
         topic,
         chainId,
         request: { method: "moi.signInteraction", params: [toWireJson(ix)] },
       });
+      // A phone that never answers must not hold a request open for good. On
+      // timeout the relay request is abandoned; a tap that lands afterwards
+      // resolves a promise nobody is waiting on, so nothing is broadcast.
+      const raw = this.requestTimeoutMs && this.requestTimeoutMs > 0
+        ? await withTimeout(pending, this.requestTimeoutMs)
+        : await pending;
 
       // Parse the result. WcSignInteractionResult schema from schema.ts validates
       // the shape. If parsing fails, the wallet returned something we don't understand.

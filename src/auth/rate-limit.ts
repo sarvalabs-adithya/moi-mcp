@@ -25,33 +25,43 @@ function clientKey(req: Request): string {
   return (first ?? req.ip ?? req.socket.remoteAddress ?? "unknown").trim();
 }
 
-export function rateLimit(opts: RateLimitOptions) {
-  const now = opts.now ?? Date.now;
-  const hits = new Map<string, number[]>();
+/** The counting half, usable from plain node:http as well as Express. */
+export class SlidingWindow {
+  private readonly hits = new Map<string, number[]>();
+  private readonly now: () => number;
+  constructor(private readonly opts: RateLimitOptions) {
+    this.now = opts.now ?? Date.now;
+  }
 
-  return function limiter(req: Request, res: Response, next: NextFunction): void {
-    const key = clientKey(req);
-    const t = now();
-    const floor = t - opts.windowMs;
-
-    const recent = (hits.get(key) ?? []).filter((ts) => ts > floor);
-    if (recent.length >= opts.max) {
+  allow(key: string): { ok: true } | { ok: false; retryAfterS: number } {
+    const t = this.now();
+    const floor = t - this.opts.windowMs;
+    const recent = (this.hits.get(key) ?? []).filter((ts) => ts > floor);
+    if (recent.length >= this.opts.max) {
       const oldest = recent[0] ?? t;
-      const retryAfterS = Math.max(1, Math.ceil((oldest + opts.windowMs - t) / 1000));
-      res.setHeader("Retry-After", String(retryAfterS));
-      res.status(429).json({ error: "rate_limited", error_description: "Too many requests. Try again shortly." });
-      return;
+      return { ok: false, retryAfterS: Math.max(1, Math.ceil((oldest + this.opts.windowMs - t) / 1000)) };
     }
-
     recent.push(t);
-    hits.set(key, recent);
-
+    this.hits.set(key, recent);
     // Opportunistic sweep so an attacker rotating addresses cannot grow the
     // map without bound. Cheap enough to run on every request.
-    if (hits.size > 10_000) {
-      for (const [k, v] of hits) {
-        if (v.every((ts) => ts <= floor)) hits.delete(k);
+    if (this.hits.size > 10_000) {
+      for (const [k, v] of this.hits) {
+        if (v.every((ts) => ts <= floor)) this.hits.delete(k);
       }
+    }
+    return { ok: true };
+  }
+}
+
+export function rateLimit(opts: RateLimitOptions) {
+  const window = new SlidingWindow(opts);
+  return function limiter(req: Request, res: Response, next: NextFunction): void {
+    const verdict = window.allow(clientKey(req));
+    if (!verdict.ok) {
+      res.setHeader("Retry-After", String(verdict.retryAfterS));
+      res.status(429).json({ error: "rate_limited", error_description: "Too many requests. Try again shortly." });
+      return;
     }
     next();
   };

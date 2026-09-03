@@ -42,6 +42,8 @@ import { ErrorCode } from "./schema.js";
 import { buildReadOnlyServer, MCP_PATH } from "./http.js";
 import { brandAsset, landingHtml } from "./branding.js";
 import { securityHeaders } from "./security-headers.js";
+import { cleanErrors } from "./clean-errors.js";
+import { rateLimit } from "./auth/rate-limit.js";
 import { randomUUID } from "node:crypto";
 import { withModernSchemaDialect } from "./json-schema-dialect.js";
 import { WriteJournal } from "./journal.js";
@@ -428,8 +430,12 @@ export function buildHostedApp(deps: HostedDeps): Application {
     }
   };
 
-  app.post(MCP_PATH, handleMcp);
-  app.get(MCP_PATH, handleMcp);
+  // Generous, since one conversation can issue several tool calls a second,
+  // but a ceiling: the RPC node behind this should not be someone's free
+  // load generator.
+  const mcpLimiter = rateLimit({ windowMs: 60_000, max: 240 });
+  app.post(MCP_PATH, mcpLimiter, handleMcp);
+  app.get(MCP_PATH, mcpLimiter, handleMcp);
 
   app.get("/", (_req, res) => {
     res.status(200).type("html").send(landingHtml("MOI MCP", MCP_PATH));
@@ -447,6 +453,7 @@ export function buildHostedApp(deps: HostedDeps): Application {
   app.use((_req, res) => {
     send(res, 404, { error: `Not found. The MCP endpoint is ${MCP_PATH}.` });
   });
+  app.use(cleanErrors);
 
   return app;
 }
@@ -615,7 +622,8 @@ async function main(): Promise<void> {
     projectId: cfg.WC_PROJECT_ID,
     home: hosted.dataDir,
     network: cfg.MOI_NETWORK,
-    requestTimeoutMs: cfg.REQUEST_TIMEOUT_MS,
+    // The hosted budget, not the stdio one: claude.ai allows 300 s per call.
+    requestTimeoutMs: hosted.HOSTED_TIMEOUT_MS,
     ...(wcStorage ? { storage: wcStorage } : {}),
   });
   const journal = new WriteJournal(hosted.dataDir);
@@ -638,6 +646,8 @@ async function main(): Promise<void> {
       publicUrl: hosted.PUBLIC_URL,
     }),
   );
+
+  app.use(cleanErrors);
 
   app.listen(hosted.HOSTED_PORT, () => {
     // Never log a token, cookie, or pairing URL — only what is safe in a

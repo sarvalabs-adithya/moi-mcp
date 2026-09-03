@@ -16,7 +16,7 @@ import { randomUUID } from "node:crypto";
 
 import { getConfig } from "../config.js";
 import { messageOf } from "../errors.js";
-import { interactionUrl } from "../moi/provider.js";
+import { interactionUrl, NETWORKS } from "../moi/provider.js";
 import type { AuthInfo } from "../auth/types.js";
 import { isExpired } from "../wc/lifetime.js";
 import {
@@ -129,7 +129,9 @@ async function afterSignedUse(deps: HostedWriteDeps, session: StoredWalletSessio
 
 const WRITE_ANNOTATIONS = {
   readOnlyHint: false,
-  destructiveHint: false,
+  // These move funds or change chain state, and cannot be undone. The hint is
+  // what a client uses to decide whether to ask before calling.
+  destructiveHint: true,
   idempotentHint: false,
   openWorldHint: true,
 } as const;
@@ -178,7 +180,7 @@ export function registerHostedWrites(
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, requireAuth());
+        const session = await loadSession(deps, requireAuth(), NETWORKS[getConfig().MOI_NETWORK].caip2);
 
         const prepared = await prepareTransfer(session.address, { to, assetId, amount, memo });
 
@@ -231,7 +233,7 @@ export function registerHostedWrites(
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, requireAuth());
+        const session = await loadSession(deps, requireAuth(), NETWORKS[getConfig().MOI_NETWORK].caip2);
 
         const balance = await kmoiBalance(session.address);
         const prepared = await prepareCreateAsset(session.address, {
@@ -294,7 +296,7 @@ export function registerHostedWrites(
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, requireAuth());
+        const session = await loadSession(deps, requireAuth(), NETWORKS[getConfig().MOI_NETWORK].caip2);
 
         const prepared = await prepareMint(session.address, { assetId, amount, to });
 
@@ -360,7 +362,7 @@ export function registerHostedWrites(
       let signed = false;
       try {
         const cfg = getConfig();
-        const session = await loadSession(deps, requireAuth());
+        const session = await loadSession(deps, requireAuth(), NETWORKS[getConfig().MOI_NETWORK].caip2);
 
         const prepared = await prepareLogicInvoke(session.address, { logicId, routine, args });
 

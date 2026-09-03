@@ -113,7 +113,7 @@ export const DisconnectWalletInput = z.object({
 // ---------------------------------------------------------------------------
 
 export const GetAccountInput = z.object({
-  address: HexId.describe("Account address. Defaults to connected wallet."),
+  address: HexId.describe("Account address (0x…). Required; ask moi_wallet_status for the paired wallet's address if the user means their own."),
 });
 
 export const GetAccountOutput = z.object({

@@ -380,7 +380,7 @@ describe("error handling", () => {
       version: 1,
       userId: USER_A,
       topic: TOPIC_A,
-      caip2: "moi:voyage",
+      caip2: "moi:custom",
       address: ACCOUNT,
       sessionData: {},
       createdAt: new Date().toISOString(),

@@ -121,7 +121,7 @@ describe("guard order", () => {
     expect(result.isError).toBe(true);
     // The [CODE] token is the ONLY machine-readable code an agent sees: the
     // SDK's tools/call wrapper drops McpError.data (src/errors.ts).
-    expect(result.text).toMatch(/^MCP error -32600: \[INSUFFICIENT_BALANCE\] /);
+    expect(result.text).toMatch(/^\[INSUFFICIENT_BALANCE\] /);
     expect(result.text).toMatch(/holds 5 of KMOI .* needs 10/);
     expect(wallet.request).not.toHaveBeenCalled();
     // The balance check is the last read; nothing is built, estimated or simulated.

@@ -67,6 +67,19 @@ is announced and journaled; rate limits on the auth surface; framing and
 sniffing headers on every response; expired tokens swept; and the boot
 reconciler no longer calls a landed transaction orphaned.
 
+**Second audit round, verified findings, all landed.** Every hosted write
+now checks the paired wallet is on the server's chain (the mismatch path was
+dead code). Business failures (insufficient balance, bad arguments, a node
+error) come back as a structured error with a code the model can act on,
+still flagged as an error, instead of a bare throw. Signing requests time out
+on the hosted budget instead of hanging forever. Text that came from a node
+or the chain (revert reasons, asset symbols, routine names) is quoted, capped
+and control-free before it reaches the model, and long lists are bounded.
+Malformed JSON gets a clean 400 with no stack trace. The public read gateway
+and the hosted endpoint are rate limited. The fund-moving tools carry the
+destructive hint. CI reports dependency advisories without blocking on the
+one known, unpatchable elliptic advisory in the upstream SDK.
+
 **Unverified.** The Dockerfile has not been built; no Docker daemon was
 running here. Two people pairing at once has not been tried with two real
 phones (scripts/two-user-spike.mjs is ready for it). The purple logo cannot

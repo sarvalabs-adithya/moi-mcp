@@ -130,7 +130,10 @@ export function asWriteResult(err: unknown): Write {
       case ErrorCode.WALLET_NOT_CONNECTED:
         return { status: "rejected", reason: "wallet_disconnected", message: err.message };
       default:
-        break;
+        // Insufficient balance, bad arguments, a node error: things the model
+        // can explain or fix. As a bare thrown error they lost their code and
+        // structured shape; as a result they keep both.
+        return { status: "error", code: err.code, message: err.message };
     }
   }
   throw toMcpError(err);
@@ -159,6 +162,16 @@ export const WriteOutputShape = {
 export function ok(value: Write) {
   // Enforce the union even though the advertised schema is the superset.
   const checked = WriteResult.parse(value);
+  if (checked.status === "error") {
+    // A failure the model can act on: flagged as an error so it knows the
+    // call did not succeed, with the code and message kept structured, and
+    // the text left plain rather than JSON-escaped so it reads naturally.
+    return {
+      content: [{ type: "text" as const, text: `[${checked.code}] ${checked.message}` }],
+      structuredContent: checked as Record<string, unknown>,
+      isError: true,
+    };
+  }
   return {
     content: [{ type: "text" as const, text: JSON.stringify(checked, null, 2) }],
     structuredContent: checked as Record<string, unknown>,

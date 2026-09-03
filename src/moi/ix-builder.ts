@@ -414,7 +414,19 @@ export function decodeErrorHex(hex: string): string | undefined {
     }
   }
   if (current.length >= 4) runs.push(current);
-  return runs.length ? runs.join(" ") : undefined;
+  return runs.length ? quoteChainText(runs.join(" ")) : undefined;
+}
+
+/**
+ * Text that came from the chain or a node, made safe to put in front of a
+ * model: control characters stripped, whitespace collapsed, length capped,
+ * and wrapped in quotes so it reads as something that was said, not an
+ * instruction. A revert reason is data, whoever wrote it.
+ */
+export function quoteChainText(text: string, max = 240): string {
+  const clean = text.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  const capped = clean.length > max ? clean.slice(0, max - 1) + "\u2026" : clean;
+  return `"${capped}"`;
 }
 
 /**
