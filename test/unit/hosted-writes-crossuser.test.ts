@@ -94,6 +94,10 @@ class FakeStore implements WalletSessionStore {
  * relay expiry or phone unpair.
  */
 class FakeHub implements WalletConnectHubLike {
+  async pair(): Promise<never> {
+    throw new Error("FakeHub does not pair; these tests drive signing only");
+  }
+
   close = vi.fn(async () => {});
 
   signInteractionFor = vi.fn(async (topic: string, ix: unknown, opts: { description: string }) => {

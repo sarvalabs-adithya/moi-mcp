@@ -15,9 +15,10 @@
 
 import type { UnsignedInteraction } from "../moi/ix-builder.js";
 import { MoiError } from "../moi-error.js";
-import { ErrorCode } from "../schema.js";
+import { ErrorCode, WC_EVENTS, WC_METHODS, type Network } from "../schema.js";
 import { toWireJson } from "../moi/ix-builder.js";
-import { translateWcError } from "./client.js";
+import { translateWcError, toSession, WC_NAMESPACE, type PairResult } from "./client.js";
+import { NETWORKS } from "../moi/provider.js";
 import type { SignClientLike, WcConfig } from "./client.js";
 import { SignClient } from "@walletconnect/sign-client";
 
@@ -39,6 +40,7 @@ export interface HubSignResult {
  * double (TS treats private members as nominal, not structural).
  */
 export interface WalletConnectHubLike {
+  pair(network: Network, chainIdOverride?: string): Promise<PairResult>;
   signInteractionFor(
     topic: string,
     ix: UnsignedInteraction,
@@ -79,6 +81,55 @@ export class WalletConnectHub implements WalletConnectHubLike {
   static async init(config: WcConfig): Promise<WalletConnectHub> {
     const client = await defaultFactory(config);
     return new WalletConnectHub(client);
+  }
+
+  /**
+   * Opens a pairing and returns the wc: URI plus a promise that resolves when
+   * the phone approves.
+   *
+   * Pairing MUST happen on this same SignClient. signInteractionFor() resolves
+   * a topic against `this.signClient.session`, so a session paired on any other
+   * client is invisible here and every write for that user would fail with
+   * "session no longer valid" forever.
+   */
+  async pair(network: Network, chainIdOverride?: string): Promise<PairResult> {
+    const chainId = chainIdOverride ?? NETWORKS[network].caip2;
+
+    let uri: string | undefined;
+    let approval: () => Promise<unknown>;
+    try {
+      // optionalNamespaces mirrors WalletConnectClient.pair(): WalletConnect
+      // moves requiredNamespaces into optional before the wallet ever sees the
+      // proposal, so toSession() below is what actually enforces the moi chain.
+      ({ uri, approval } = await this.signClient.connect({
+        optionalNamespaces: {
+          [WC_NAMESPACE]: {
+            chains: [chainId],
+            methods: [...WC_METHODS],
+            events: [...WC_EVENTS],
+          },
+        },
+      }));
+    } catch (err) {
+      throw translateWcError(err);
+    }
+
+    if (!uri) {
+      throw new MoiError(
+        ErrorCode.RELAY_UNAVAILABLE,
+        "WalletConnect did not return a pairing URI.",
+      );
+    }
+
+    return {
+      uri,
+      approval: approval().then(
+        (raw) => toSession(raw, network, chainId),
+        (err: unknown) => {
+          throw translateWcError(err);
+        },
+      ),
+    };
   }
 
   /**

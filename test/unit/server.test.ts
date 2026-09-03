@@ -76,6 +76,10 @@ class FakeStore implements WalletSessionStore {
  * wired up for every authenticated request, same as production.
  */
 class FakeHub implements WalletConnectHubLike {
+  async pair(): Promise<never> {
+    throw new Error("FakeHub does not pair; these tests drive signing only");
+  }
+
   async signInteractionFor(): Promise<{ ix_args: string; signatures: string }> {
     throw new Error("FakeHub.signInteractionFor is not exercised by this test file");
   }

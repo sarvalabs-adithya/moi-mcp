@@ -28,7 +28,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import express, { type Application, type Request, type Response } from "express";
-import { mkdirSync, realpathSync } from "node:fs";
+import { realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -44,7 +44,6 @@ import { NETWORKS } from "./moi/provider.js";
 import { createPairingLink as createPairingLinkFor, consumeForUser, mountPairing } from "./pairing/index.js";
 import { registerHostedWrites } from "./tools/hosted-writes.js";
 import { WalletConnectHub, type WalletConnectHubLike } from "./wc/hub.js";
-import { WalletConnectClient } from "./wc/client.js";
 import { FileWalletSessionStore, type StoredWalletSession, type WalletSessionStore } from "./wc/store.js";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -365,51 +364,24 @@ export function buildHostedApp(deps: HostedDeps): Application {
  * phone approves, in the background — persist the paired session and mark
  * the pairing link consumed.
  *
- * ONE WalletConnectClient for the whole process, so ONE pairing is in flight
- * at a time across every user. That is the same limitation PLAN-HOSTED.md §1
- * notes for the trunk.
+ * Pairing runs on the hub's SignClient, and that is load-bearing rather than
+ * hygiene: signInteractionFor() resolves a topic against its own client's
+ * session store, so a session paired on any other client is invisible to the
+ * signer and every write for that user would fail "session no longer valid"
+ * forever.
  *
- * SEAM: this WalletConnectClient is a SEPARATE SignClient from the one
- * WalletConnectHub (§1 of the multi-user-writes contract) owns and
- * constructs in main() below — i.e. this process currently runs two
- * SignClients (two relay sockets, two wc.db's), not the one the contract's
- * §0.1 invariant calls for. The contract flags the fix (rework
- * WalletConnectClient/makeResolveUri to pair through the hub's shared
- * SignClient instead of `defaultFactory`) as its own scoped task — it is not
- * done here. Pairing itself (this function) is unaffected either way: it
- * only produces a StoredWalletSession that write tools read from `store`,
- * never from this client directly.
- *
- * WalletConnectClient is single-user code (src/wc/client.ts) that always
- * persists its OWN last-approved session to one un-keyed `<home>/session.json`
- * (src/wc/session.ts), with no notion of which user paired. `home` here must
- * therefore NEVER be `hosted.dataDir` — that is the multi-tenant root the
- * per-user FileWalletSessionStore (`store`, keyed by sha256(userId), see
- * wc/store.ts) also lives under, and letting the two coexist there invites a
- * future caller to assume `wc`'s own session accessors (session(),
- * currentSession(), disconnect()) are per-user when they are actually
- * last-writer-wins across every user on this process. Point it at a
- * dedicated, non-authoritative scratch directory instead: `store` (not `wc`)
- * is the only thing any tool should ever read a specific user's session from.
- * A future write-tool milestone resolving a session for `auth.userId` must
- * load it from `store`, not from this shared client.
+ * The approved session is also written to `store` (FileWalletSessionStore,
+ * keyed by sha256(userId)). That is the only place a tool may learn a
+ * specific user's topic — the relay client itself has no notion of which
+ * user paired, so asking it would give whoever paired most recently.
  */
 function makeResolveUri(
   cfg: ReturnType<typeof getConfig>,
-  hosted: ReturnType<typeof getHostedConfig>,
+  hub: WalletConnectHubLike,
   store: WalletSessionStore,
 ): (userId: string) => Promise<string> {
-  const wcHome = join(hosted.dataDir, "wc-relay-scratch");
-  mkdirSync(wcHome, { recursive: true, mode: 0o700 });
-  const wc = new WalletConnectClient({
-    projectId: cfg.WC_PROJECT_ID,
-    home: wcHome,
-    network: cfg.MOI_NETWORK,
-    requestTimeoutMs: hosted.HOSTED_TIMEOUT_MS,
-  });
-
   return async (userId: string): Promise<string> => {
-    const { uri, approval } = await wc.pair();
+    const { uri, approval } = await hub.pair(cfg.MOI_NETWORK);
 
     // Do not block the pairing page on the phone tap; it already polls via
     // its own cached-promise mechanism (src/pairing/index.ts handleGet).
@@ -505,7 +477,7 @@ async function main(): Promise<void> {
   wireSessionDeleteReconciliation(hub, store);
   await reconcileJournalOnBoot(journal);
 
-  mountPairing(app, { resolveUri: makeResolveUri(cfg, hosted, store) });
+  mountPairing(app, { resolveUri: makeResolveUri(cfg, hub, store) });
 
   app.use(
     buildHostedApp({

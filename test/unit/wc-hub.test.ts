@@ -687,3 +687,57 @@ describe("WalletConnectHub", () => {
     });
   });
 });
+
+/**
+ * The hub must pair on the same SignClient it signs with.
+ *
+ * signInteractionFor() resolves a topic against `signClient.session`. When
+ * pairing ran on a second client (as it briefly did), the paired session was
+ * written to that other client's store, so the signer could never find it and
+ * every hosted write failed "session no longer valid" forever. These tests pin
+ * the two operations to one client so that cannot come back.
+ */
+describe("WalletConnectHub pairing and signing share one client", () => {
+  it("can sign on a topic produced by its own pair()", async () => {
+    const sessions = new Map<string, unknown>();
+    const approved = {
+      topic: "topic-from-pairing",
+      namespaces: { moi: { accounts: ["moi:14:0xabc123"] } },
+      expiry: Math.floor(Date.now() / 1000) + 3600,
+      peer: { metadata: { name: "MOI Wallet", url: "https://moi.technology" } },
+    };
+
+    const client = fakeSignClient({
+      connect: vi.fn(async () => ({
+        uri: "wc:real-looking-uri",
+        approval: async () => {
+          // The relay records the approved session on THIS client.
+          sessions.set(approved.topic, { ...approved, chainId: "moi:14" });
+          return approved;
+        },
+      })),
+      session: {
+        keys: [],
+        get: (topic: string) => sessions.get(topic),
+      },
+    } as Partial<SignClientLike>);
+
+    const hub = new WalletConnectHub(client);
+    const { uri, approval } = await hub.pair("voyage");
+    expect(uri).toBe("wc:real-looking-uri");
+
+    const session = await approval;
+    expect(session.topic).toBe(approved.topic);
+
+    // The signer resolves that topic without any cross-client hand-off.
+    const signed = await hub.signInteractionFor(session.topic, testInteraction());
+    expect(signed.ix_args).toBe("deadbeef");
+  });
+
+  it("refuses a topic its own client never paired", async () => {
+    const hub = new WalletConnectHub(fakeSignClient());
+    await expect(hub.signInteractionFor("topic-from-elsewhere", testInteraction())).rejects.toThrow(
+      MoiError,
+    );
+  });
+});
