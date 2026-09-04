@@ -205,6 +205,23 @@ export const WriteResult = z.discriminatedUnion("status", [
     code: z.string(),
     message: z.string(),
   }),
+  /**
+   * Hosted writes only. Nothing has reached the phone: this is what it will
+   * be asked to sign, for the user to read in the chat first. Calling again
+   * with the same arguments and `confirm` sends it.
+   */
+  z.object({
+    status: z.literal("preview"),
+    confirm: z.string(),
+    summary: z.string(),
+    /** The values the wallet will render, labelled in the user's terms. */
+    details: z.record(z.string(), z.string()),
+    fuel: z.string(),
+    network: z.string(),
+    expiresAt: z.string(),
+    /** Why this is a preview again when the caller expected to send. */
+    note: z.string().optional(),
+  }),
 ]);
 export type WriteResult = z.infer<typeof WriteResult>;
 

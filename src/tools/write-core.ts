@@ -150,14 +150,39 @@ export function asWriteResult(err: unknown): Write {
  * schema is looser.
  */
 export const WriteOutputShape = {
-  status: z.enum(["sent", "rejected", "error"]),
+  status: z.enum(["sent", "rejected", "error", "preview"]),
   hash: z.string().optional(),
   explorerUrl: z.string().optional(),
   summary: z.string().optional(),
   reason: z.enum(["user_rejected", "timeout", "network_mismatch", "wallet_disconnected"]).optional(),
   message: z.string().optional(),
   code: z.string().optional(),
+  confirm: z.string().optional(),
+  details: z.record(z.string(), z.string()).optional(),
+  fuel: z.string().optional(),
+  network: z.string().optional(),
+  expiresAt: z.string().optional(),
+  note: z.string().optional(),
 };
+
+/** The preview as a block the model can paste into the chat. */
+function previewText(p: Extract<Write, { status: "preview" }>): string {
+  const lines = [
+    ...(p.note ? [p.note, ""] : []),
+    "PREVIEW. Nothing has been sent to the phone.",
+    p.summary,
+    "",
+    "What the phone will show:",
+    ...Object.entries(p.details).map(([k, v]) => `  ${k}: ${v}`),
+    `  Fuel: ${p.fuel}`,
+    `  Network: ${p.network}`,
+    "",
+    "Show the user the summary and these values and get an explicit yes. Then call again with " +
+      `the same arguments and confirm="${p.confirm}" (valid until ${p.expiresAt}). ` +
+      "Tell them to check that the amount and address on the phone match before tapping.",
+  ];
+  return lines.join("\n");
+}
 
 export function ok(value: Write) {
   // Enforce the union even though the advertised schema is the superset.
@@ -170,6 +195,12 @@ export function ok(value: Write) {
       content: [{ type: "text" as const, text: `[${checked.code}] ${checked.message}` }],
       structuredContent: checked as Record<string, unknown>,
       isError: true,
+    };
+  }
+  if (checked.status === "preview") {
+    return {
+      content: [{ type: "text" as const, text: previewText(checked) }],
+      structuredContent: checked as Record<string, unknown>,
     };
   }
   return {
@@ -212,6 +243,13 @@ export async function broadcastSigned(ix_args: string, signatures: string): Prom
 export interface PreparedWrite {
   ix: UnsignedInteraction;
   description: string;
+  /**
+   * What the wallet will render, labelled for a person. The wallet has no
+   * field for `description`, so these are how the chat lets the user check
+   * the phone: the same numbers, in base units where the phone shows base
+   * units.
+   */
+  details: Record<string, string>;
 }
 
 /**
@@ -247,6 +285,14 @@ export async function prepareTransfer(
   return {
     ix,
     description: `Transfer ${params.amount} ${asset.symbol || params.assetId} to ${params.to}${params.memo ? ` — ${params.memo}` : ""}`,
+    details: {
+      Operation: "Transfer",
+      Asset: `${asset.symbol || "(no symbol)"} ${params.assetId}`,
+      Amount: params.amount,
+      "Amount in base units": raw.toString(),
+      To: params.to,
+      ...(params.memo ? { Memo: params.memo } : {}),
+    },
   };
 }
 
@@ -257,17 +303,19 @@ export async function prepareCreateAsset(
   account: string,
   params: z.infer<typeof CreateAssetInput> & { balance: bigint },
 ): Promise<PreparedWrite> {
+  const supply = parseAmount(params.supply, params.dimension);
+  const storageFund = params.storageFund
+    ? parseAmount(params.storageFund, 0)
+    : chooseStorageFund(params.balance);
   const ix = await withMeasuredFuel(
     buildCreateAsset(await senderFor(account), {
       symbol: params.symbol,
-      supply: parseAmount(params.supply, params.dimension),
+      supply,
       dimension: params.dimension,
       standard: params.standard,
       isStateful: params.isStateful,
       isFungible: params.isFungible,
-      storageFund: params.storageFund
-        ? parseAmount(params.storageFund, 0)
-        : chooseStorageFund(params.balance),
+      storageFund,
     }),
   );
   assertSendable(ix);
@@ -281,6 +329,16 @@ export async function prepareCreateAsset(
   return {
     ix,
     description: `Create asset ${params.symbol} with supply ${params.supply}`,
+    details: {
+      Operation: "Create asset",
+      Symbol: params.symbol,
+      "Max supply": params.supply,
+      "Max supply in base units": supply.toString(),
+      Dimension: String(params.dimension),
+      Standard: params.standard,
+      "Storage fund, KMOI base units (deposited into the asset's own account, not spent)":
+        storageFund.toString(),
+    },
   };
 }
 
@@ -312,6 +370,13 @@ export async function prepareMint(
   return {
     ix,
     description: `Mint ${params.amount} ${asset.symbol || params.assetId} to ${recipient}`,
+    details: {
+      Operation: "Mint",
+      Asset: `${asset.symbol || "(no symbol)"} ${params.assetId}`,
+      Amount: params.amount,
+      "Amount in base units": raw.toString(),
+      To: recipient,
+    },
   };
 }
 
@@ -341,6 +406,12 @@ export async function prepareLogicInvoke(
   return {
     ix,
     description: `Call ${params.routine} on logic ${params.logicId}`,
+    details: {
+      Operation: "Invoke logic routine",
+      Logic: params.logicId,
+      Routine: params.routine,
+      Arguments: JSON.stringify(params.args ?? [], (_k, v) => (typeof v === "bigint" ? v.toString() : v)),
+    },
   };
 }
 

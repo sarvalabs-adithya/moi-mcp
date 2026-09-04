@@ -107,6 +107,11 @@ describe("the consent page tells the user where a grant goes and what it allows"
     expect(html).not.toMatch(/<code>moi:write<\/code>/);
   });
 
+  it("says there is no account, so a missing login reads as designed rather than broken", () => {
+    expect(html).toMatch(/no account to sign in to/i);
+    expect(html).toMatch(/wallet is your identity/i);
+  });
+
   it("escapes a hostile client name", () => {
     const evil = renderConsentPage({
       clientName: "<script>alert(1)</script>",

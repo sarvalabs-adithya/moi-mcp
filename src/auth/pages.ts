@@ -48,6 +48,7 @@ export function renderConsentPage(opts: {
 <p>After you approve, you will be sent back to <strong>${esc(opts.redirectOrigin)}</strong>. If that is not the app you are using, deny this.</p>
 <p>It is asking to:</p>
 <ul>${scopeList}</ul>
+<p>There is no account to sign in to. Your wallet is your identity: approving links this browser to the phone you pair next, and nothing more.</p>
 <p style="color:#555;font-size:0.9rem">Nothing here gives it your keys. Every transaction still needs your approval in MOI Wallet on your phone.</p>
 <form method="post" action="${esc(opts.formAction)}" style="display:flex;gap:0.75rem;margin-top:1.5rem">
 ${hiddenInputs}

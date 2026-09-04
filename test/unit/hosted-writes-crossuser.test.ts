@@ -200,6 +200,28 @@ function toolCall(id: number, name: string, args: Record<string, unknown> = {}) 
   return { jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } };
 }
 
+/**
+ * A write as a model performs it: the preview call, then the same call with
+ * the confirm token. Anything that is not a preview (a 401, a rejection, a
+ * view) comes straight back, so every expectation below still reads as the
+ * outcome of one write.
+ */
+async function send(
+  baseUrl: string,
+  call: ReturnType<typeof toolCall>,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; headers: Headers; json: any }> {
+  const first = await rpc(baseUrl, call, headers);
+  const preview = first.json?.result?.structuredContent;
+  if (first.status !== 200 || preview?.status !== "preview") return first;
+  const confirmed = {
+    ...call,
+    id: call.id + 100,
+    params: { ...call.params, arguments: { ...call.params.arguments, confirm: preview.confirm } },
+  };
+  return rpc(baseUrl, confirmed, headers);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -255,7 +277,7 @@ describe("cross-user write tools isolation", () => {
       createdAt: new Date().toISOString(),
     });
 
-    const result = await rpc(
+    const result = await send(
       baseUrl,
       toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
       { authorization: "Bearer token-a" },
@@ -299,10 +321,10 @@ describe("cross-user write tools isolation", () => {
 
     // Fire both requests in parallel
     const [resultA, resultB] = await Promise.all([
-      rpc(baseUrl, toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }), {
+      send(baseUrl, toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }), {
         authorization: "Bearer token-a",
       }),
-      rpc(baseUrl, toolCall(2, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "20" }), {
+      send(baseUrl, toolCall(2, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "20" }), {
         authorization: "Bearer token-b",
       }),
     ]);
@@ -322,7 +344,7 @@ describe("cross-user write tools isolation", () => {
   // 3. Unauthenticated request never reaches write tools
   // =========================================================================
   it("3. unauthenticated transfer call returns 401, hub never called", async () => {
-    const { status, headers, json } = await rpc(baseUrl, toolCall(1, "moi_transfer", { to: ACCOUNT }));
+    const { status, headers, json } = await send(baseUrl, toolCall(1, "moi_transfer", { to: ACCOUNT }));
 
     expect(status).toBe(401);
     expect(headers.get("www-authenticate")).toContain("resource_metadata");
@@ -336,7 +358,7 @@ describe("cross-user write tools isolation", () => {
   it("4. user C (no paired wallet) gets WALLET_NOT_CONNECTED", async () => {
     // User C is not in the store
 
-    const result = await rpc(
+    const result = await send(
       baseUrl,
       toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
       { authorization: "Bearer token-a" }, // Auth as A to ensure no cross-talk
@@ -367,7 +389,7 @@ describe("cross-user write tools isolation", () => {
 
     // Attempt transfer on a different network (if the tool supports network param)
     // For now, just seed on wrong network and verify the error occurs
-    const result = await rpc(
+    const result = await send(
       baseUrl,
       toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10", network: "mainnet" }),
       { authorization: "Bearer token-a" },
@@ -397,7 +419,7 @@ describe("cross-user write tools isolation", () => {
     // Simulate relay deleting the session (phone-side disconnect)
     hub.simulateSessionDelete(TOPIC_A);
 
-    const result = await rpc(
+    const result = await send(
       baseUrl,
       toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
       { authorization: "Bearer token-a" },
@@ -472,7 +494,7 @@ describe("cross-user write tools isolation", () => {
 
     // User A tries to call transfer with injected topic/userId/account pointing to B
     // The impl should ignore these and use auth.userId
-    const result = await rpc(
+    const result = await send(
       baseUrl,
       toolCall(1, "moi_transfer", {
         to: ACCOUNT,
@@ -601,12 +623,12 @@ describe("cross-user write tools isolation", () => {
 
     // Fire two different write tools concurrently
     const [resultA, resultB] = await Promise.all([
-      rpc(
+      send(
         baseUrl,
         toolCall(1, "moi_mint", { assetId: KMOI, amount: "100" }),
         { authorization: "Bearer token-a" },
       ),
-      rpc(
+      send(
         baseUrl,
         toolCall(2, "moi_create_asset", { symbol: "TST", supply: "1000" }),
         { authorization: "Bearer token-b" },
@@ -649,7 +671,7 @@ describe("cross-user write tools isolation", () => {
     });
 
     // User A calls a transfer. The hub will be called with A's topic.
-    const result = await rpc(
+    const result = await send(
       baseUrl,
       toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
       { authorization: "Bearer token-a" },
@@ -680,12 +702,12 @@ describe("cross-user write tools isolation", () => {
 
     // Fire two calls from A in parallel
     const [result1, result2] = await Promise.all([
-      rpc(
+      send(
         baseUrl,
         toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
         { authorization: "Bearer token-a" },
       ),
-      rpc(
+      send(
         baseUrl,
         toolCall(2, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "20" }),
         { authorization: "Bearer token-a" },
@@ -720,7 +742,7 @@ describe("cross-user write tools isolation", () => {
         createdAt: new Date().toISOString(),
       });
 
-      const result = await rpc(
+      const result = await send(
         baseUrl,
         toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
         { authorization: "Bearer token-a" },
@@ -753,7 +775,7 @@ describe("cross-user write tools isolation", () => {
       // Relay-expired: hub.signInteractionFor throws before the phone ever signs.
       hub.simulateSessionDelete(TOPIC_A);
 
-      const result = await rpc(
+      const result = await send(
         baseUrl,
         toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
         { authorization: "Bearer token-a" },
@@ -786,7 +808,7 @@ describe("cross-user write tools isolation", () => {
         throw new RpcFailure("simulated relay outage");
       });
 
-      const result = await rpc(
+      const result = await send(
         baseUrl,
         toolCall(1, "moi_transfer", { to: ACCOUNT, assetId: KMOI, amount: "10" }),
         { authorization: "Bearer token-a" },

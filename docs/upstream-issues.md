@@ -195,7 +195,7 @@ The node returns `asset_deeds` on `moi.AccountState` where the SDK type says
 and the wire disagree.
 
 
-## 3. `moi.signInteraction` has no way to show the user what they are signing
+## 6. `moi.signInteraction` has no way to show the user what they are signing
 
 **Severity: limits how informed a phone approval can be.**
 
@@ -207,10 +207,15 @@ has no memo or label field. The wallet therefore renders whatever it can decode
 from the raw operations. For a transfer that is legible; for an asset create,
 a mint, or a logic call with encoded calldata, it is much less so.
 
-**Workaround, and what the server ships:** the write tools instruct the model
-to state amount, asset, and recipient and get an explicit yes *before* the
-call, and echo that sentence back with the hash. The chat is the approval
-screen the user can actually read; the phone tap confirms it.
+**Workaround, and what the server ships:** every hosted write is two calls.
+The first builds and simulates the interaction and returns a preview: the
+sentence, the values the wallet will render (amount in base units, asset id,
+recipient, storage fund), and a single-use confirm token bound to the user,
+the tool and the arguments. The second call, carrying the token, is the only
+path to the phone. So the chat shows the phone's own numbers before the phone
+does, the model cannot skip the step, and if the numbers move between the two
+calls the user gets a fresh preview rather than a send. The stdio server keeps
+the single-call flow with a confirm-before-call instruction.
 
 **Wallet-side fix:** accept an optional second param (or a `meta.description`
 like the `ix_args` style already models for `sendInteractions`) and render it

@@ -80,6 +80,17 @@ and the hosted endpoint are rate limited. The fund-moving tools carry the
 destructive hint. CI reports dependency advisories without blocking on the
 one known, unpatchable elliptic advisory in the upstream SDK.
 
+**Preview before phone, and a consent page that explains itself.** Every
+hosted write is now two calls: a preview that returns the sentence, the values
+the wallet will render in the wallet's own units, and a single-use confirm
+token bound to the user, the tool and the arguments; then the send. The wallet
+has nowhere to show a description, so the chat shows the phone's numbers
+first, and a model cannot reach the phone without having been handed the
+preview. If the numbers move between the two calls (a balance drops, so the
+storage fund shrinks) the user gets a fresh preview instead of a send. The
+consent page now says there is no account to sign in to and that the wallet is
+the identity. 419 tests.
+
 **Unverified.** The Dockerfile has not been built; no Docker daemon was
 running here. Two people pairing at once has not been tried with two real
 phones (scripts/two-user-spike.mjs is ready for it). The purple logo cannot
