@@ -172,6 +172,41 @@ In a Claude chat, in order:
 
 Deployment is done when step 3 lands on chain.
 
+## Testing before DNS is ready (cloudflared tunnel)
+
+To try the whole flow before the real hostnames exist, expose the write
+gateway through a Cloudflare quick tunnel. No Cloudflare account needed.
+
+```bash
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
+chmod +x cloudflared && sudo mv cloudflared /usr/local/bin/
+
+cloudflared tunnel --url http://localhost:8788
+# prints a URL like https://random-words.trycloudflare.com — leave it running
+```
+
+In a second terminal, start the write gateway with that URL as its public
+address (run it directly, not under pm2 — the tunnel URL is temporary):
+
+```bash
+cd /opt/moi-mcp
+PUBLIC_URL=https://random-words.trycloudflare.com node dist/server.js
+```
+
+Add `https://random-words.trycloudflare.com/mcp` in Claude with **OAuth** and
+run the step 7 checks against it.
+
+Notes:
+
+- Every quick-tunnel start gets a new random URL. Restart the server with
+  the new `PUBLIC_URL` and re-add the connector in Claude each time.
+- Read gateway: `cloudflared tunnel --url http://localhost:8787`, add with
+  authentication **None**. No `PUBLIC_URL` involved.
+- The MOI icon does not display on a trycloudflare hostname; it will on the
+  real one. Expected, not a bug.
+- Tunnels are for testing only — anything user-facing runs on the real
+  hostnames.
+
 ## Updating
 
 ```bash
