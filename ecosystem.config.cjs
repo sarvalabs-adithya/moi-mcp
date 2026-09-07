@@ -18,6 +18,9 @@ module.exports = {
       // Read-only gateway. Stateless, holds nothing, safe to run several of.
       name: "moi-mcp-read",
       script: "dist/http.js",
+      // Pinned so pm2 resurrect after a reboot still resolves dist/ and .env,
+      // whatever directory it happens to run from.
+      cwd: "/opt/moi-mcp",
       instances: 1,
       env: {
         NODE_ENV: "production",
@@ -41,6 +44,7 @@ module.exports = {
       // failure.
       name: "moi-mcp-write",
       script: "dist/server.js",
+      cwd: "/opt/moi-mcp",
       instances: 1,
       exec_mode: "fork",
       env: {

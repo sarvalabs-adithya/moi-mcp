@@ -29,7 +29,7 @@ Two independent Node.js services, both in this repo, built by `npm run build`:
 | Sign-in | None — public endpoint | OAuth (the service itself is the issuer; `PUBLIC_URL` must equal the public hostname) |
 | Secrets | None | `WC_PROJECT_ID` (WalletConnect project id) in `.env` |
 | Storage | None | `MOI_DATA_DIR` (`/var/lib/moi-mcp`) on disk; or Redis via `REDIS_URL` |
-| Scaling | Any number of copies | Exactly one process (pairings are held in-process; Redis is what would allow more) |
+| Scaling | Any number of copies | Exactly one process, even with Redis — the live WalletConnect client is per-process |
 
 Around them:
 
@@ -61,6 +61,10 @@ prompt from that stored record alone. No tool call can name a wallet,
 account, or session, so one user's request can only ever reach that user's
 own phone.
 
+Pairings expire: a week when the user chooses to stay connected, 15 minutes
+for a one-shot pairing. After expiry the user simply pairs again — expected
+behavior, not a fault.
+
 Everything the auth server needs (cookie secret, token store, wallet
 pairings, write journal) lives under `MOI_DATA_DIR`. That is why the
 directory must survive restarts and is worth backing up.
@@ -77,7 +81,13 @@ Voyage already serves.
    No redirects may sit in front of either hostname, including HTTP→HTTPS:
    a redirect drops the `Authorization` header and sign-in breaks silently.
 3. A WalletConnect project id (free, https://cloud.reown.com).
-4. A phone with MOI Wallet, for the final verification.
+4. Outbound access from the host: HTTPS to the voyage RPC endpoint
+   (`dev.voyage-rpc.moi.technology`, or the internal one — see `MOI_RPC_URL`
+   below) for both gateways, plus WebSocket (wss) to the WalletConnect/Reown
+   relay for the write gateway.
+5. A phone with MOI Wallet, for the final verification — its account must
+   hold at least ~20,000 KMOI on voyage (the asset-create test needs 10,000
+   storage fund + 10,000 fuel reserve).
 
 The steps below assume one Ubuntu VM with nginx and pm2. That layout is a
 suggestion — any equivalent (different distro, proxy, or supervisor) is fine
@@ -99,12 +109,18 @@ sudo npm install -g pm2
 
 ```bash
 cd /opt/moi-mcp
-printf 'WC_PROJECT_ID=your_32_character_id_here\n' > .env
+printf 'WC_PROJECT_ID=REPLACE_ME\n' > .env
 chmod 600 .env
+# now edit .env and put the real project id in place of REPLACE_ME —
+# left unedited, the server refuses to start with a message saying exactly this
 
 sudo mkdir -p /var/lib/moi-mcp && sudo chown "$USER" /var/lib/moi-mcp
 chmod 700 /var/lib/moi-mcp
 ```
+
+Optional: add `MOI_RPC_URL=<internal voyage RPC endpoint>` to `.env` to route
+chain reads through Voyage's internal RPC instead of the public URL. Both
+gateways honor it.
 
 `PUBLIC_URL` in `ecosystem.config.cjs` is already set to
 `https://mcp.voyage.moi.technology`. It is the OAuth issuer and must match
@@ -144,10 +160,11 @@ server {
         proxy_pass http://127.0.0.1:8788;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;   # required — the app rate-limits per client IP
         proxy_set_header X-Forwarded-Proto $scheme;
 
         proxy_buffering off;      # required — responses stream
-        proxy_read_timeout 300s;
+        proxy_read_timeout 300s;  # the app caps tool calls at 240s; keep this above it
         proxy_send_timeout 300s;
         gzip off;
     }
@@ -157,6 +174,12 @@ server {
 ```bash
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+The Node services listen on all interfaces, so block inbound 8787 and 8788
+from outside (`sudo ufw deny 8787 && sudo ufw deny 8788`, or the cloud
+security group). nginx reaches them over loopback, which is unaffected.
+Without this, the gateways are reachable directly, skipping TLS and the rate
+limit.
 
 ## 5. Verify from outside
 
@@ -186,12 +209,18 @@ sign-in prompt.
 
 In a Claude chat, in order:
 
-1. Ask: *"what's the supply of asset 0x1080... on voyage"* — a read returns
-   real chain data.
-2. Ask: *"connect my MOI wallet"* — sign in when prompted, a QR code appears
-   in the chat, scan it with MOI Wallet on the phone.
-3. Ask: *"create a test asset called DEPLOYTEST with supply 100"* — an
-   approval prompt appears on the phone; approve it.
+1. Ask: *"what's the supply of asset
+   0x108000004cd973c4eb83cdb8870c0de209736270491b7acc99873da100000000 on
+   voyage"* (that is KMOI, the voyage native asset) — a read returns real
+   chain data.
+2. Ask: *"connect my MOI wallet, stay connected for a week"* — sign in when
+   prompted, then a QR code appears in the chat. Scan it with MOI Wallet
+   within 5 minutes and approve the pairing on the phone.
+3. Ask: *"create a test asset called DEPLOYTEST with supply 100"* — Claude
+   first shows a preview with the storage fund and fuel cost; confirm it,
+   and then the approval prompt appears on the phone. Approve it there.
+   (Needs the ~20,000 KMOI from the prerequisites; an underfunded wallet
+   fails at the preview with a clear error.)
 4. Ask: *"what's my wallet status"* — shows the paired account.
 
 Deployment is done when step 3 lands on chain.
@@ -209,13 +238,18 @@ cloudflared tunnel --url http://localhost:8788
 # prints a URL like https://random-words.trycloudflare.com — leave it running
 ```
 
-In a second terminal, start the write gateway with that URL as its public
-address (run it directly, not under pm2 — the tunnel URL is temporary):
+In a second terminal, stop the pm2 copy first — two write gateways conflict
+on port 8788 and on the WalletConnect relay — then start the gateway directly
+with the tunnel URL as its public address (substitute the URL cloudflared
+actually printed):
 
 ```bash
+pm2 stop moi-mcp-write
 cd /opt/moi-mcp
 PUBLIC_URL=https://random-words.trycloudflare.com node dist/server.js
 ```
+
+When done testing, Ctrl-C the direct process and `pm2 start moi-mcp-write`.
 
 Add `https://random-words.trycloudflare.com/mcp` in Claude with **OAuth** and
 run the step 7 checks against it.
@@ -241,3 +275,7 @@ pm2 restart moi-mcp-read moi-mcp-write   # restart, NOT reload
 Reload overlaps old and new processes, and two write gateways fight over the
 same WalletConnect relay identity. Restart's two-second gap is the cheaper
 failure.
+
+If a release changes the stored pairing format (release notes will say so),
+existing users have to pair again — old session records are dropped, the
+write journal is kept.
