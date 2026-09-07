@@ -18,6 +18,9 @@ module.exports = {
       // Read-only gateway. Stateless, holds nothing, safe to run several of.
       name: "moi-mcp-read",
       script: "dist/http.js",
+      // Pinned so pm2 resurrect after a reboot still resolves dist/ and .env,
+      // whatever directory it happens to run from.
+      cwd: "/opt/moi-mcp",
       instances: 1,
       env: {
         NODE_ENV: "production",
@@ -41,6 +44,7 @@ module.exports = {
       // failure.
       name: "moi-mcp-write",
       script: "dist/server.js",
+      cwd: "/opt/moi-mcp",
       instances: 1,
       exec_mode: "fork",
       env: {
@@ -50,7 +54,7 @@ module.exports = {
         LOG_LEVEL: "info",
         // Must match the public hostname exactly. It is the OAuth issuer, so a
         // mismatch makes sign-in fail in a way that reads as a client bug.
-        PUBLIC_URL: "https://mcp.moi.technology",
+        PUBLIC_URL: "https://mcp.voyage.moi.technology",
         // Wallet pairings and the write journal. Back this up, or set
         // REDIS_URL and it stops mattering.
         MOI_DATA_DIR: "/var/lib/moi-mcp",
