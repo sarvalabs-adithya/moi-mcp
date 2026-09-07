@@ -1,16 +1,61 @@
-# MOI MCP — deployment checklist
+# MOI MCP gateway — deployment guide
 
-Steps to deploy the MCP gateway and verify it end to end. Background and
-reasoning: `docs/deploy-vm.md`.
+## What this is
 
-## Before starting, have
+This service lets AI assistants (Claude and anything else that speaks MCP)
+work with the MOI chain. A user adds one URL as a connector in their
+assistant, and can then ask questions about accounts, assets, logics and
+interactions in plain language — and, after pairing MOI Wallet once by
+scanning a QR code, ask the assistant to make transactions: create an asset,
+mint, transfer, call a logic.
 
-- Ubuntu VM with Node.js 20+ and nginx
-- A **dedicated hostname** with DNS pointing at the VM and a TLS certificate.
-  No redirects on this hostname, not even HTTP→HTTPS (a redirect drops the
-  `Authorization` header and sign-in silently breaks).
-- A WalletConnect project id — free at https://cloud.reown.com
-- A phone with MOI Wallet installed (for the final check)
+**The server never holds a private key.** Every transaction is signed on the
+user's own phone: the server builds the interaction, sends a signing request
+to MOI Wallet over WalletConnect, the user approves on the phone, and the
+server broadcasts the signed result and records the receipt. Reads are a
+protocol translation only — each tool call becomes a JSON-RPC request to the
+voyage endpoint MOI already serves.
+
+## Technical components
+
+Two independent Node.js services, both in this repo, built by `npm run build`:
+
+| | Read gateway | Write gateway |
+|---|---|---|
+| Entry point | `dist/http.js` | `dist/server.js` |
+| Port | 8787 | 8788 |
+| Tools | 6 (reads + ping) | 13 (reads + wallet + transactions) |
+| State | None — stateless, no secrets | Wallet pairing per user + write journal |
+| Sign-in | None — public endpoint | OAuth (the service itself is the issuer; `PUBLIC_URL` must equal the public hostname) |
+| Secrets | None | `WC_PROJECT_ID` (WalletConnect project id) in `.env` |
+| Storage | None | `MOI_DATA_DIR` (`/var/lib/moi-mcp`) on disk; or Redis via `REDIS_URL` |
+| Scaling | Any number of copies | Exactly one process (pairings are held in-process; Redis is what would allow more) |
+
+Around them:
+
+- **nginx** terminates TLS and proxies each hostname to its port. MCP
+  responses stream, so `proxy_buffering off` is required, not tuning.
+- **pm2** supervises both processes and restarts them on boot
+  (`ecosystem.config.cjs` in the repo root defines both).
+- **WalletConnect** relays signing requests between the write gateway and
+  MOI Wallet on the phone. Needs the free project id from
+  https://cloud.reown.com.
+
+## What you need
+
+1. A host with Node.js 20+ and a TLS-terminating reverse proxy.
+2. **Two dedicated hostnames**, one per gateway, with DNS and certificates —
+   the placeholders below are `mcp.moi.technology` (write) and
+   `mcp-read.moi.technology` (read). No redirects may sit in front of either
+   hostname, including HTTP→HTTPS: a redirect drops the `Authorization`
+   header and sign-in breaks silently.
+3. A WalletConnect project id (free, https://cloud.reown.com).
+4. A phone with MOI Wallet, for the final verification.
+
+The steps below assume one Ubuntu VM with nginx and pm2. That layout is a
+suggestion — any equivalent (different distro, proxy, or supervisor) is fine
+as long as the proxy rules in step 4 and the one-process rule for the write
+gateway are kept.
 
 ## 1. Install
 
@@ -34,29 +79,34 @@ sudo mkdir -p /var/lib/moi-mcp && sudo chown "$USER" /var/lib/moi-mcp
 chmod 700 /var/lib/moi-mcp
 ```
 
-Edit `ecosystem.config.cjs`: set `PUBLIC_URL` to the real hostname
-(`https://your.hostname`). It must match exactly what users reach or sign-in
-fails.
+Edit `ecosystem.config.cjs`: set `PUBLIC_URL` to `https://mcp.moi.technology`
+(the real write hostname). It is the OAuth issuer — a mismatch makes sign-in
+fail.
 
 ## 3. Start
 
 ```bash
-pm2 start ecosystem.config.cjs --only moi-mcp-write
+pm2 start ecosystem.config.cjs
 pm2 save
 pm2 startup   # prints a sudo command — run it
 
+curl localhost:8787/health
+# {"ok":true,"version":"0.1.0","network":"voyage","readOnly":true}
 curl localhost:8788/health
 # {"ok":true,"network":"voyage","readOnly":false,"pairingMounted":true}
 ```
 
 ## 4. nginx
 
+One server block per hostname; only `server_name` and the port differ.
+`mcp.moi.technology` → 8788, `mcp-read.moi.technology` → 8787.
+
 ```nginx
 limit_req_zone $binary_remote_addr zone=moimcp:10m rate=10r/s;
 
 server {
     listen 443 ssl http2;
-    server_name your.hostname;
+    server_name mcp.moi.technology;
 
     # your certificate directives
 
@@ -83,50 +133,48 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 5. Verify from outside
 
 ```bash
-curl https://your.hostname/health
+curl https://mcp.moi.technology/health
+curl https://mcp-read.moi.technology/health
 
-curl -X POST https://your.hostname/mcp \
+curl -X POST https://mcp.moi.technology/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-# should list 13 tools
+# 13 tools; the same call on mcp-read lists 6
 ```
 
 ## 6. Connect in Claude
 
-claude.ai → Settings → Connectors → Add custom connector → paste
-`https://your.hostname/mcp` → authentication: **OAuth** (not None).
+claude.ai → Settings → Connectors → Add custom connector:
+
+- `https://mcp.moi.technology/mcp` — authentication **OAuth**
+- `https://mcp-read.moi.technology/mcp` — authentication **None**
+
+Getting the write gateway's setting wrong (None instead of OAuth) means
+sign-in never happens and every wallet tool returns an unsatisfiable
+sign-in prompt.
 
 ## 7. Verify end to end
 
 In a Claude chat, in order:
 
-1. Ask: *"what's the supply of asset 0x1080... on voyage"* — a read should
-   return real chain data.
-2. Ask: *"connect my MOI wallet"* — sign in when prompted, a QR appears in
-   the chat, scan it with MOI Wallet on the phone.
+1. Ask: *"what's the supply of asset 0x1080... on voyage"* — a read returns
+   real chain data.
+2. Ask: *"connect my MOI wallet"* — sign in when prompted, a QR code appears
+   in the chat, scan it with MOI Wallet on the phone.
 3. Ask: *"create a test asset called DEPLOYTEST with supply 100"* — an
    approval prompt appears on the phone; approve it.
-4. Ask: *"what's my wallet status"* — should show the paired account.
+4. Ask: *"what's my wallet status"* — shows the paired account.
 
 Deployment is done when step 3 lands on chain.
-
-## Optional: separate read-only gateway
-
-A stateless, no-secrets endpoint (6 tools) safe to share publicly. Needs its
-own dedicated hostname.
-
-```bash
-pm2 start ecosystem.config.cjs --only moi-mcp-read && pm2 save
-curl localhost:8787/health
-```
-
-Same nginx block on the other hostname with `proxy_pass http://127.0.0.1:8787`.
-In Claude, add it with authentication **None**.
 
 ## Updating
 
 ```bash
 cd /opt/moi-mcp && git pull && npm ci && npm run build
-pm2 restart moi-mcp-write   # restart, NOT reload
+pm2 restart moi-mcp-read moi-mcp-write   # restart, NOT reload
 ```
+
+Reload overlaps old and new processes, and two write gateways fight over the
+same WalletConnect relay identity. Restart's two-second gap is the cheaper
+failure.
