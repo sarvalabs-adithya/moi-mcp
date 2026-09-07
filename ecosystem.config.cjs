@@ -50,7 +50,7 @@ module.exports = {
         LOG_LEVEL: "info",
         // Must match the public hostname exactly. It is the OAuth issuer, so a
         // mismatch makes sign-in fail in a way that reads as a client bug.
-        PUBLIC_URL: "https://mcp.moi.technology",
+        PUBLIC_URL: "https://mcp.voyage.moi.technology",
         // Wallet pairings and the write journal. Back this up, or set
         // REDIS_URL and it stops mattering.
         MOI_DATA_DIR: "/var/lib/moi-mcp",

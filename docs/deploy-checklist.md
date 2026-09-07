@@ -43,12 +43,15 @@ Around them:
 
 ## What you need
 
+This deploys on the Voyage infrastructure, next to the JSON-RPC gateway
+Voyage already serves.
+
 1. A host with Node.js 20+ and a TLS-terminating reverse proxy.
-2. **Two dedicated hostnames**, one per gateway, with DNS and certificates —
-   the placeholders below are `mcp.moi.technology` (write) and
-   `mcp-read.moi.technology` (read). No redirects may sit in front of either
-   hostname, including HTTP→HTTPS: a redirect drops the `Authorization`
-   header and sign-in breaks silently.
+2. **Two dedicated hostnames** with DNS and certificates:
+   - `mcp.voyage.moi.technology` — write gateway, the URL users add
+   - `mcp-read.voyage.moi.technology` — read gateway
+   No redirects may sit in front of either hostname, including HTTP→HTTPS:
+   a redirect drops the `Authorization` header and sign-in breaks silently.
 3. A WalletConnect project id (free, https://cloud.reown.com).
 4. A phone with MOI Wallet, for the final verification.
 
@@ -79,9 +82,10 @@ sudo mkdir -p /var/lib/moi-mcp && sudo chown "$USER" /var/lib/moi-mcp
 chmod 700 /var/lib/moi-mcp
 ```
 
-Edit `ecosystem.config.cjs`: set `PUBLIC_URL` to `https://mcp.moi.technology`
-(the real write hostname). It is the OAuth issuer — a mismatch makes sign-in
-fail.
+`PUBLIC_URL` in `ecosystem.config.cjs` is already set to
+`https://mcp.voyage.moi.technology`. It is the OAuth issuer and must match
+the public write hostname exactly — a mismatch makes sign-in fail. Change it
+only if the hostname changes.
 
 ## 3. Start
 
@@ -99,14 +103,14 @@ curl localhost:8788/health
 ## 4. nginx
 
 One server block per hostname; only `server_name` and the port differ.
-`mcp.moi.technology` → 8788, `mcp-read.moi.technology` → 8787.
+`mcp.voyage.moi.technology` → 8788, `mcp-read.voyage.moi.technology` → 8787.
 
 ```nginx
 limit_req_zone $binary_remote_addr zone=moimcp:10m rate=10r/s;
 
 server {
     listen 443 ssl http2;
-    server_name mcp.moi.technology;
+    server_name mcp.voyage.moi.technology;
 
     # your certificate directives
 
@@ -133,10 +137,10 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 5. Verify from outside
 
 ```bash
-curl https://mcp.moi.technology/health
-curl https://mcp-read.moi.technology/health
+curl https://mcp.voyage.moi.technology/health
+curl https://mcp-read.voyage.moi.technology/health
 
-curl -X POST https://mcp.moi.technology/mcp \
+curl -X POST https://mcp.voyage.moi.technology/mcp \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -147,8 +151,8 @@ curl -X POST https://mcp.moi.technology/mcp \
 
 claude.ai → Settings → Connectors → Add custom connector:
 
-- `https://mcp.moi.technology/mcp` — authentication **OAuth**
-- `https://mcp-read.moi.technology/mcp` — authentication **None**
+- `https://mcp.voyage.moi.technology/mcp` — authentication **OAuth**
+- `https://mcp-read.voyage.moi.technology/mcp` — authentication **None**
 
 Getting the write gateway's setting wrong (None instead of OAuth) means
 sign-in never happens and every wallet tool returns an unsatisfiable
