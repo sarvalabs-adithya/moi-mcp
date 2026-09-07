@@ -28,8 +28,8 @@ Two independent Node.js services, both in this repo, built by `npm run build`:
 | State | None — stateless, no secrets | Wallet pairing per user + write journal |
 | Sign-in | None — public endpoint | OAuth (the service itself is the issuer; `PUBLIC_URL` must equal the public hostname) |
 | Secrets | None | `WC_PROJECT_ID` (WalletConnect project id) in `.env` |
-| Storage | None | `MOI_DATA_DIR` (`/var/lib/moi-mcp`) on disk; or Redis via `REDIS_URL` |
-| Scaling | Any number of copies | Exactly one process, even with Redis — the live WalletConnect client is per-process |
+| Storage | None | `MOI_DATA_DIR` (`/var/lib/moi-mcp`) on disk |
+| Scaling | Any number of copies | Exactly one process — the live WalletConnect client is per-process |
 
 Around them:
 
