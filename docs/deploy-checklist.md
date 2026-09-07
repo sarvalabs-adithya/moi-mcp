@@ -41,6 +41,30 @@ Around them:
   MOI Wallet on the phone. Needs the free project id from
   https://cloud.reown.com.
 
+## Sign-in and wallet identity
+
+The write gateway contains its own OAuth 2.1 authorization server. There is
+no external identity provider, user database, or password system to set up —
+nothing extra to deploy. Claude registers itself against it automatically
+(dynamic client registration with PKCE). This is why `PUBLIC_URL` must equal
+the public hostname exactly: it is the issuer URL the auth server advertises.
+
+There are no user accounts. Sign-in sets a signed browser cookie, and that
+cookie is the user id — the consent page says as much: the wallet you pair
+is the identity. Signing in from a different browser means a new id and a
+fresh pairing.
+
+How different users' wallets stay separate: each wallet pairing is stored
+server-side keyed by that user id — one wallet per user, under
+`MOI_DATA_DIR/sessions/` — and every transaction resolves which phone to
+prompt from that stored record alone. No tool call can name a wallet,
+account, or session, so one user's request can only ever reach that user's
+own phone.
+
+Everything the auth server needs (cookie secret, token store, wallet
+pairings, write journal) lives under `MOI_DATA_DIR`. That is why the
+directory must survive restarts and is worth backing up.
+
 ## What you need
 
 This deploys on the Voyage infrastructure, next to the JSON-RPC gateway
