@@ -20,7 +20,15 @@ export function securityHeaders(publicUrl: string | undefined) {
       "Content-Security-Policy",
       // Pages here are self-contained: inline style and a few lines of inline
       // script for the copy button, nothing loaded from anywhere else.
-      "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      //
+      // form-action must cover more than 'self': Chrome re-checks it against
+      // the redirect that follows a form submission, and the consent form's
+      // POST answers with a 302 to the OAuth client's callback (claude.ai).
+      // With 'self' alone Chrome blocks that redirect and sign-in dies on
+      // Approve. Which origins may receive the redirect is already enforced
+      // where it belongs: /register only accepts https or localhost redirect
+      // URIs, and /authorize validates against the registration.
+      "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self' https: http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'",
     );
     if (hsts) res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     next();
