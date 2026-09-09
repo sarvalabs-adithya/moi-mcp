@@ -119,9 +119,12 @@ Every write is also simulated against the node first and refused locally if it w
 
 ## Documentation
 
-- [docs/quickstart.md](./docs/quickstart.md): the shortest path to a first read and a first write
-- [HANDOFF.md](./HANDOFF.md) and [docs/deploy-vm.md](./docs/deploy-vm.md): deploying and operating the hosted server
-- [docs/findings.md](./docs/findings.md): what building the server turned up about MOI's integration surface, written for someone judging whether the design is sound
+- [docs/OVERVIEW.md](./docs/OVERVIEW.md): the whole picture in one document; read this first
+- [docs/how-it-works.md](./docs/how-it-works.md): the full explanation from zero, every piece and every step
+- [docs/handoff-infra.md](./docs/handoff-infra.md): deploying and operating the hosted server
+- [docs/reviewer-guide.md](./docs/reviewer-guide.md): the code review guide
+- [docs/quickstart.md](./docs/quickstart.md): the shortest path to a first read and a first write with the local server
+- [docs/findings.md](./docs/findings.md): what building the server turned up about MOI's integration surface
 - [docs/deploy-voyage.md](./docs/deploy-voyage.md): deployment against the voyage devnet
 - [docs/upstream-issues.md](./docs/upstream-issues.md): known gaps in the wallet and SDK, with evidence
 
