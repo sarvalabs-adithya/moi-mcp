@@ -1,77 +1,28 @@
-# @moi-protocol/mcp-server
+# MOI MCP server
 
-**An MCP server for MOI. It publishes the schema, so an agent can construct the
-call.**
+An MCP server for the MOI blockchain. MCP (Model Context Protocol) is the standard that lets a chat assistant such as Claude call typed tools; this server exposes MOI reads and writes as those tools, the chat proposes each action, your phone approves it, and the server holds no private keys. It runs two ways: as a hosted connector you add to claude.ai by URL, and as a local server that talks to the MCP client over standard input and output (stdio), for desktop MCP clients such as Claude Desktop (`src/server.ts` and `src/index.ts`).
 
-That is the whole difference between this and the JSON-RPC endpoint you already
-have. With JSON-RPC you must already know the method names, the argument order,
-and the payload shape. MCP hands the agent a typed description of every
-operation, so it can work out the call itself — including MOI's own vocabulary,
-where an interaction is not a transaction and a tesseract is not a block.
+MOI uses its own words. An interaction is a transaction. A tesseract is a block. A logic is a smart contract, written in Cocolang. Fuel is the fee an interaction pays. A participant is an account whose state an interaction may touch.
 
-Reads need nothing but a network connection. For writes, the agent builds the
-interaction here, your phone signs it, and this server broadcasts the signed
-bytes to the node: **this server holds no private keys and cannot sign.** The
-only `Signer` class in the codebase throws when asked. That is not a policy, it
-is the type system — adding a signing path would mean writing a new class, not
-passing a different argument.
+## Use it from claude.ai
 
-```
-you: what's in my MOI wallet?
-     -> reads the chain directly, no pairing needed
+1. In claude.ai, open Settings, then Connectors, and add a custom connector with the server URL. A custom connector is a third party MCP server that claude.ai talks to over HTTP. Use the URL the operator gives you (the server is moving to a permanent domain, so the URL is a placeholder here).
+2. Sign in on the consent page the connector opens. The server runs its own OAuth 2.1 flow (`src/auth/`). OAuth is the protocol claude.ai uses to get a token that proves it acts for you. There are no accounts and no passwords; your identity is a browser cookie named `moi_uid` (`src/auth/routes.ts:22`).
+3. In a chat, ask Claude to connect your wallet. Claude calls `moi_connect_wallet`, and the tool returns a QR code image in the chat (`src/server.ts:198`).
+4. Scan the QR code with the MOI Wallet app on your phone and approve the pairing there. The pairing uses WalletConnect v2, a protocol that links a phone wallet to another program through a relay server, so the two never need a direct connection. The QR code expires in about 5 minutes; if it does, call `moi_connect_wallet` again. By default the pairing lasts a week (`src/server.ts`).
+5. Chat. Reads work immediately. Balances, assets, interactions, logics, and the agent registry all come straight from the chain.
 
-you: send 50 KMOI to the agent called pricefeed-01
-     -> resolves the agent in the on-chain registry
-     -> builds the interaction here, simulates it against the node
-     -> your phone buzzes. nothing is signed until you tap Approve.
-     -> the signed interaction is broadcast from here; you get the hash
-```
+Every write is two tool calls (`src/tools/hosted-writes.ts`). On the first call Claude shows you a preview: one sentence, the exact values the wallet will display, the fuel, and a confirm token that is bound to you, the tool, and the arguments, works once, and lives ten minutes (`src/tools/preview.ts:28`). When you say yes, Claude makes the second call with the token, your phone shows the request, and nothing is sent until you tap Approve there.
 
-## Prerequisites
+If a write fails with "The wallet pairing has expired", call `moi_connect_wallet` and pair again (`src/tools/hosted-writes.ts:125`).
 
-- **Node.js 20 or later.** Get it from [nodejs.org](https://nodejs.org). Check
-  with `node -v`.
-- **[MOI Wallet](https://docs.wallet.moi.technology/getting-started/download)**
-  on your phone (Android, iOS, or the Chrome extension) — this is what signs
-  writes. Reads work without it.
+## Run it locally
 
-> [!IMPORTANT]
-> The default network, `voyage`, is MOI's **devnet**. KMOI there is test
-> currency with no real value — claim some free from the
-> [Voyage faucet](https://voyage.moi.technology/faucet/), or ask in the
-> [MOI Discord](https://discord.gg/5gG6efFN4s) if the faucet is empty.
-> Mainnet is not yet supported by this server; see
-> [Configuration](#configuration).
+The local stdio server runs as a child process of your MCP client and registers all 13 tools (`src/index.ts`).
 
-## Two transports
+You need Node.js 20 or later (`package.json` engines) and the MOI Wallet app on your phone for writes. Reads work without the wallet. The default network, `voyage`, is MOI's devnet, a test network where currency has no real value; KMOI there is test currency, claimable from the [Voyage faucet](https://voyage.moi.technology/faucet/).
 
-| | stdio (local) | HTTP (hostable) |
-|---|---|---|
-| Tools | all 13 | `ping` + the 5 read tools |
-| Wallet | yes | none |
-| Needs `WC_PROJECT_ID` | yes | no (see note) |
-| State | WalletConnect session | none |
-| Run as | child process of your MCP client | a service behind a URL |
-
-The split is forced by what a wallet needs. A WalletConnect session is a
-persistent relay socket and a pending approval waits the better part of a minute for a
-phone tap — neither survives a stateless request/response service. So writes
-stay local, and reads run behind a URL.
-
-The HTTP half imports no wallet code at all, so the write path is unreachable
-over the network by construction rather than by configuration.
-
-```bash
-PORT=8787 node dist/http.js                          # local build -> http://localhost:8787/mcp
-PORT=8787 npx -y -p @moi-protocol/mcp-server moi-mcp-http   # from npm
-curl localhost:8787/health
-```
-
-The HTTP server needs no `WC_PROJECT_ID` — it registers no wallet tools and
-satisfies the shared config schema itself, so `/health` and every read work
-with nothing configured.
-
-## Install
+Add this to your MCP client config. For Claude Desktop the file is `claude_desktop_config.json` (macOS: `~/Library/Application Support/Claude/`, Windows: `%APPDATA%\Claude\`, Linux: `~/.config/Claude/`). If the file already has an `mcpServers` block, add `"moi"` as a new key inside it.
 
 ```json
 {
@@ -85,158 +36,124 @@ with nothing configured.
 }
 ```
 
-Get a project id from [cloud.reown.com](https://cloud.reown.com) — it's free,
-and it's a public identifier, not a secret.
+`WC_PROJECT_ID` is a WalletConnect project id. Get a free one at [cloud.reown.com](https://cloud.reown.com); it is a public identifier, and the server rejects placeholder values (`src/config.ts`). Ready made configs for Claude Desktop, Cursor, and OpenClaw live in [`examples/`](./examples).
 
-**Where `claude_desktop_config.json` lives:**
-
-| OS | Path |
-|---|---|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
-
-The file may not exist yet if you've never launched Claude Desktop — open the
-app once, quit it, and the file appears. If it already has an `mcpServers`
-block (from another server), **merge** — add `"moi"` as a new key inside that
-block, don't overwrite the file.
-
-Ready-made copies live in [`examples/`](./examples): Claude Desktop, Cursor, and OpenClaw.
-
-Restart Claude Desktop completely (quit the app, not just the window) after
-editing, then pair once, either from the terminal or from inside a chat:
+Restart the client completely, then pair once from the terminal:
 
 ```bash
 npx -y -p @moi-protocol/mcp-server moi-mcp pair
 ```
 
-## Tools
+The command prints a QR code in the terminal; scan it with MOI Wallet. This command shows the session afterwards:
 
-The stdio server registers all 13. The HTTP server registers the first six.
+```bash
+npx -y -p @moi-protocol/mcp-server moi-mcp status
+```
 
-| Tool | Wallet needed | What it does |
-|---|---|---|
-| `ping` | no | Health check: version, network, config status |
-| `moi_get_account` | no | Nonce, registration, and every asset balance |
-| `moi_get_asset` | no | Symbol, standard, supply, decimal dimension |
-| `moi_get_interaction` | no | Status, sender, fuel used, operations of an interaction |
-| `moi_get_logic` | no | A logic's callable routines and their kinds |
-| `moi_resolve_agent` | no | Look up an agent in the on-chain registry |
-| `moi_connect_wallet` | — | Returns a QR to scan with MOI Wallet |
-| `moi_wallet_status` | — | Paired account, network, expiry, config health |
-| `moi_disconnect_wallet` | — | End the session |
-| `moi_transfer` | **yes** | Propose an asset transfer |
-| `moi_create_asset` | **yes** | Propose a new asset; `storageFund` sets its KMOI funding |
-| `moi_call_logic` | view: no, invoke: **yes** | Call a routine. `view` reads; `invoke` needs approval |
-
-Two resources are exposed too: `moi://networks` and `moi://docs/quickstart`.
-
-**`moi_create_asset` and `storageFund`.** A new MOI asset must hold KMOI to pay
-for its own storage, so the tool bundles an `ASSET_CREATE` with a KMOI transfer
-to the asset id it will get. `storageFund` is optional: omitted, the server sizes it from your balance
-(the SDK's 1,000,000 default silently exceeds most devnet accounts). Pass it
-only to override. Below ~6,100 KMOI an asset cannot pay for its storage at
-all, so a balance too small to cover that is refused up front.
-
-`moi_get_logic` lists a logic's callable routines with their kinds — the
-registry logic reports 14. `moi_call_logic` with an unknown routine name also
-lists the real ones in its error message.
-
-## Security model
-
-- **No keys, ever.** The server never generates, stores, or accepts a private
-  key or mnemonic. Signing happens on your phone.
-- **Sign on the phone, broadcast from here.** Writes ask MOI Wallet for
-  `moi.signInteraction` (the phone shows the approval screen and returns
-  `{ ix_args, signatures }`), then this server submits that to the node's
-  `moi.SendInteractions`. The wallet's own sign-and-send method
-  (`moi.sendInteractions`) crashes the wallet's local database today — see
-  `docs/upstream-issues.md` §1.
-- **Reads need no wallet.** Everything read-only works before you pair.
-- **Network guard.** If your wallet is on a different network than
-  `MOI_NETWORK`, writes are refused with `network_mismatch` rather than sent to
-  the wrong chain.
-- **Balance and simulation pre-checks.** Transfers that cannot succeed are
-  refused locally; every write is simulated against the node (`moi.Call`) and
-  refused if the node says it would fail. Nothing that would burn fuel for
-  nothing reaches your phone.
-- **`$MOI_MCP_HOME` is `0700`, `session.json` is `0600`.** They hold the
-  WalletConnect keystore and session — no key material, but still a handle to a
-  wallet.
-- **Nothing is auto-approved.** Every write waits for a human tap, and times out
-  (default 55s, deliberately under the MCP client's 60s) rather than hanging forever.
-
-## Configuration
-
-Every environment variable the server reads. The first seven are validated by
-`src/config.ts` (they are `schema.Config`); the rest are read where they are
-used.
+Environment variables, validated by `src/config.ts` against the schema at `src/schema.ts:465`:
 
 | Variable | Default | Notes |
 |---|---|---|
 | `MOI_NETWORK` | `voyage` | `voyage`, `mainnet`, or `custom` |
-| `MOI_RPC_URL` | — | Required for `custom` (and for `mainnet`, see below) |
-| `WC_PROJECT_ID` | — | **Required** for the stdio server. From [cloud.reown.com](https://cloud.reown.com), 32 hex chars; placeholders are rejected |
-| `MOI_MCP_HOME` | `~/.moi-mcp` | Session + WalletConnect keystore |
-| `MOI_EXPLORER_URL` | `https://voyage.moi.technology` | Used to build `explorerUrl` in write results |
-| `REQUEST_TIMEOUT_MS` | `55000` | How long to wait for the phone. Keep it under the client's own timeout (60s in the MCP SDK), or a late tap broadcasts what the client already gave up on |
-| `LOG_LEVEL` | `error` | `silent`, `error`, `info`, `debug`. All logs go to stderr; stdout is the MCP transport |
-| `MOI_AGENT_REGISTRY_LOGIC_ID` | (shipped default) | Same variable `js-moi-agent-registry` uses |
-| `MOI_READ_CALLER` | — | Participant id used as the caller for read-only logic simulation |
-| `MOI_WC_PARAM_STYLE` | `positional` | `ix_args` changes the payload of `moi.sendInteractions` only — the live write path uses `moi.signInteraction` with `params: [ixObject]` regardless |
-| `PORT` | `8787` | HTTP server only |
+| `MOI_RPC_URL` | none | Required when `MOI_NETWORK=custom` |
+| `WC_PROJECT_ID` | none | Required for the stdio server; Reown ids are 32 hex characters, and the server warns on other shapes and rejects placeholders (`src/config.ts:36`) |
+| `MOI_MCP_HOME` | `~/.moi-mcp` | Session and WalletConnect keystore, created `0700` |
+| `MOI_EXPLORER_URL` | `https://voyage.moi.technology` | Builds explorer links in write results |
+| `REQUEST_TIMEOUT_MS` | `55000` | How long to wait for the phone tap; keep it under the MCP client's own 60s timeout |
+| `LOG_LEVEL` | `error` | `silent`, `error`, `info`, `debug`; all logs go to stderr |
 
-The server also loads a `.env` from its working directory (`dotenv`, quiet
-mode). See `.env.example`.
+The server also loads a `.env` from its working directory; see `.env.example`. Three more variables are read where they are used: `MOI_AGENT_REGISTRY_LOGIC_ID` (registry override), `MOI_READ_CALLER` (caller identity for read only logic simulation), and `MOI_WC_PARAM_STYLE` (set to `ix_args` to switch the WalletConnect parameter encoding; the default is positional, `src/wc/client.ts:41`).
 
-## Troubleshooting
+A read only HTTP gateway also exists (`src/http.ts`). It registers `ping` and the five read tools, holds no wallet code, and needs no `WC_PROJECT_ID`:
 
-**"WC_PROJECT_ID is not set"** — get a project id from
-[cloud.reown.com](https://cloud.reown.com) and put it in the `env` block of
-your MCP client config. The server still starts without it so it can tell you
-this; reads work, pairing does not.
+```bash
+PORT=8787 npx -y -p @moi-protocol/mcp-server moi-mcp-http
+```
 
-**"The WalletConnect relay refused the pairing"** — almost always an invalid
-`WC_PROJECT_ID`.
+```bash
+curl localhost:8787/health
+```
 
-**`network_mismatch` on a write** — your wallet and `MOI_NETWORK` disagree.
-Switch networks in MOI Wallet, or change `MOI_NETWORK` to match. Reads keep
-working either way.
+```json
+{"ok":true,"version":"0.1.0","network":"voyage","readOnly":true}
+```
 
-**"The wallet session has expired"** — run `moi-mcp pair` again.
+A 503 response with `ok: false` means the config failed to load (`src/http.ts:128`).
 
-**"The node says this interaction would fail"** — the simulation refused it and
-nothing was sent to your phone. The message includes the node's reason; for
-`moi_create_asset` it is usually the storage fund exceeding your balance.
+If pairing fails with "The WalletConnect relay refused the pairing", the `WC_PROJECT_ID` is almost always invalid. If a write fails with `NETWORK_MISMATCH` ("Wallet is on \<caip2\>, expected \<network\>"), your wallet and `MOI_NETWORK` disagree; switch networks in MOI Wallet or change the variable.
 
-**`moi_resolve_agent` always returns `found:false`** — the registry may have no
-entries on your network, or read-only simulation may need a caller identity that
-exists on chain. Set `MOI_READ_CALLER` to any real participant id.
+## Tools
 
-**mainnet doesn't work** — MOI has not published a mainnet RPC URL or a
-WalletConnect chain id. Use `MOI_NETWORK=custom` with `MOI_RPC_URL` pointed at a
-node you can reach.
+The hosted server and the local stdio server each list 13 tools. Reads are defined in `src/tools/reads.ts`, the wallet surface in `src/server.ts` (hosted) and `src/tools/wallet.ts` (stdio), and writes in `src/tools/hosted-writes.ts` (hosted) and `src/tools/writes.ts` (stdio).
 
-## Vocabulary
+| Tool | Phone approval | What it does |
+|---|---|---|
+| `ping` | no | Health check: server version, network, config status |
+| `moi_get_account` | no | The account's nonce (the count of interactions the account has sent), whether it is registered on chain, and its balance in every asset |
+| `moi_get_asset` | no | Asset symbol, standard, supply, decimal dimension, owner |
+| `moi_get_interaction` | no | Interaction status, sender, operations, and fuel used, by hash |
+| `moi_get_logic` | no | A deployed logic's callable routines with input and output types |
+| `moi_resolve_agent` | no | Look up an AI agent in the on chain registry by handle, name, or address |
+| `moi_connect_wallet` | pairing tap | Returns a QR code to pair MOI Wallet over WalletConnect |
+| `moi_wallet_status` | no | Whether a wallet is paired, and which account |
+| `moi_disconnect_wallet` | no | Forget the pairing |
+| `moi_transfer` | yes | Propose an asset transfer; balance checked first |
+| `moi_create_asset` | yes | Propose a new asset; funds its storage and previews the amount |
+| `moi_mint` | yes | Propose minting more of an asset the paired wallet manages |
+| `moi_call_logic` | view: no, invoke: yes | Call a logic routine; `view` reads, `invoke` changes state |
 
-MOI has its own words. Interaction = transaction. Tesseract = block. Logic =
-smart contract (written in Cocolang). Fuel = gas. Participant = an account whose
-state an interaction may touch, declared up front — the runtime sandboxes
-everything else.
+Two MCP resources are also exposed: `moi://networks` and `moi://docs/quickstart` (`src/resources/`).
+
+On `moi_create_asset`: a new MOI asset must hold KMOI to pay for its own storage, so the tool bundles the creation with a KMOI transfer to the asset's own account. The `storageFund` argument is optional; omitted, the server sizes it from your balance. See `docs/upstream-issues.md` on where that deposit sits.
+
+## Security model
+
+- The server never generates, stores, or accepts a private key or mnemonic; the only `Signer` class in the codebase throws when asked to sign.
+- Your phone approves every write. The wallet signs (`moi.signInteraction`) and the server broadcasts the signed interaction to the node, because the wallet's combined sign and send call crashes the wallet (`docs/upstream-issues.md`).
+- OAuth access tokens are stored as SHA-256 hashes, never in plain text (`src/auth/index.ts:71`).
+- The confirm token binds the preview you read to the write that is sent: same user, same tool, same arguments, ten minutes, one use (`src/tools/preview.ts`).
+- Wallet pairings expire: after a week by default, or after one approved transaction or 15 minutes with `remember: false` (`src/server.ts`).
+- Every hosted response carries security headers (`src/security-headers.ts`), and the MCP endpoint and every auth endpoint are rate limited (`src/server.ts:436`, `src/auth/rate-limit.ts`).
+
+Every write is also simulated against the node first and refused locally if it would fail, so nothing that would burn fuel for nothing reaches your phone. Writes are recorded through proposed, signed, broadcast, and confirmed states in a journal (`src/journal.ts`).
+
+## Documentation
+
+- [docs/quickstart.md](./docs/quickstart.md): the shortest path to a first read and a first write
+- [HANDOFF.md](./HANDOFF.md) and [docs/deploy-vm.md](./docs/deploy-vm.md): deploying and operating the hosted server
+- [docs/findings.md](./docs/findings.md): what building the server turned up about MOI's integration surface, written for someone judging whether the design is sound
+- [docs/deploy-voyage.md](./docs/deploy-voyage.md): deployment against the voyage devnet
+- [docs/upstream-issues.md](./docs/upstream-issues.md): known gaps in the wallet and SDK, with evidence
 
 ## Development
 
 ```bash
-npm install && npm test && npm run typecheck && npm run build
-npm run test:e2e        # live reads against voyage devnet (MOI_E2E=1)
-npm run cross-check     # same three reads through this server and ~/moi-mcp-go, diffed
-npm run inspect         # MCP Inspector against the local source
-npm run pair            # terminal QR; npm run status shows the session
+git clone https://github.com/sarvalabs-adithya/moi-mcp
 ```
 
-`npm test` is hermetic: 169 tests drive the real tool handlers over an
-in-memory MCP transport against a fake node and a fake wallet. `docs/testing-plan.md`
-lists what each tier covers.
+```bash
+cd moi-mcp
+```
+
+```bash
+npm ci
+```
+
+```bash
+npm test
+```
+
+`npm test` runs the hermetic suite with vitest. Hermetic means the tests touch no network and no real wallet: real tool handlers run over an in-memory MCP transport against a fake node and a fake wallet (`package.json` scripts, `docs/testing-plan.md`).
+
+```bash
+npm run typecheck
+```
+
+```bash
+npm run build
+```
+
+`npm run test:e2e` runs live reads against the voyage devnet, `npm run inspect` opens the MCP Inspector against the local source, and `npm run pair` and `npm run status` manage the local wallet session from a clone.
 
 ## License
 
