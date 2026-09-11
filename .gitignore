@@ -1,0 +1,18 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+coverage/
+.DS_Store
+
+# Packed Claude Desktop bundle (`npm run bundle:mcpb`) — built artifact, not source.
+*.mcpb
+
+# Never commit a wallet keystore or session, even if MOI_MCP_HOME is pointed
+# somewhere inside the repo during development.
+.moi-mcp/
+moi-mcp-home/
+*.db
+*.db-journal
+session.json

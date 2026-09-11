@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "moi": {
+      "command": "npx",
+      "args": ["-y", "@moi-protocol/mcp-server"],
+      "env": {
+        "MOI_NETWORK": "voyage",
+        "WC_PROJECT_ID": "REPLACE_WITH_YOUR_PROJECT_ID"
+      }
+    }
+  }
+}
