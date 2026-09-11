@@ -164,7 +164,7 @@ server {
 }
 ```
 
-This proxies everything to the write gateway on 8788, which serves the landing page, OAuth, pairing, and /mcp. If you also expose the read gateway publicly, give it its own hostname with the same block pointed at 8787.
+This proxies everything to the write gateway on 8788, which serves the landing page, OAuth, pairing, and /mcp. Keep the `$proxy_add_x_forwarded_for` line exactly as written: the rate limiter keys on the last address in that header, which is the one this nginx appends and the only one a sender cannot write (src/auth/rate-limit.ts, clientAddress). If you also expose the read gateway publicly, give it its own hostname with the same block pointed at 8787.
 
 Test and load the config.
 
