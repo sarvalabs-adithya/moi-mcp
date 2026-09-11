@@ -1,0 +1,54 @@
+{
+  "manifest_version": "0.3",
+  "name": "moi-mcp",
+  "display_name": "MOI",
+  "version": "0.1.0",
+  "description": "MCP server for the MOI network. Agents read chain state and propose transactions; signing happens on your phone via MOI Wallet. The server holds zero private keys.",
+  "long_description": "Publishes the MOI chain's schema so an agent can construct calls itself, instead of you hand-coding JSON-RPC. Reads (account balances, assets, interactions, logics, the agent registry) work with no wallet at all. Writes are built here, signed on your phone via MOI Wallet over WalletConnect, and broadcast from here — this server never generates, stores, or accepts a private key.",
+  "author": {
+    "name": "Adithya Ganesh"
+  },
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "moi",
+    "blockchain",
+    "walletconnect",
+    "ai-agents"
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "MOI_NETWORK": "${user_config.moi_network}",
+        "WC_PROJECT_ID": "${user_config.wc_project_id}"
+      }
+    }
+  },
+  "user_config": {
+    "wc_project_id": {
+      "type": "string",
+      "title": "WalletConnect Project ID",
+      "description": "Free project id from https://cloud.reown.com — lets this machine and your phone find each other over the WalletConnect relay. It is a public identifier, not a secret.",
+      "sensitive": true,
+      "required": true
+    },
+    "moi_network": {
+      "type": "string",
+      "title": "MOI Network",
+      "description": "Which MOI network to use: voyage (devnet, default, free test tokens), mainnet, or custom.",
+      "default": "voyage",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "name": "@moi-protocol/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server for the MOI network. Agents read chain state and propose transactions; signing happens on your phone via MOI Wallet. The server holds zero private keys.",
+  "license": "MIT",
+  "author": "Adithya Ganesh",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "mcp-server": "dist/index.js",
+    "moi-mcp": "dist/cli.js",
+    "moi-mcp-http": "dist/http.js",
+    "moi-mcp-hosted": "dist/server.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "docs",
+    "examples",
+    ".env.example",
+    "assets"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "inspect": "npx -y @modelcontextprotocol/inspector tsx src/index.ts",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "test:e2e": "MOI_E2E=1 vitest run test/e2e",
+    "pair": "node dist/cli.js pair",
+    "status": "node dist/cli.js status",
+    "dev:http": "tsx src/http.ts",
+    "start:http": "node dist/http.js",
+    "cross-check": "node scripts/cross-check.mjs",
+    "bundle:mcpb": "node scripts/bundle-mcpb.mjs"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "moi",
+    "blockchain",
+    "walletconnect",
+    "ai-agents"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@walletconnect/sign-client": "^2.17.0",
+    "dotenv": "^16.4.5",
+    "express": "^5.2.1",
+    "js-moi-sdk": "^0.8.0",
+    "js-polo": "^0.1.4",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "redis": "^6.2.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/qrcode-terminal": "^0.12.2",
+    "sharp": "^0.35.4",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
